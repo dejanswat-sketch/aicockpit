@@ -1,8 +1,8 @@
-
 'use client';
 
 import { createContext, useContext, useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { clearStaleAuthTokens } from '@/lib/supabase/client';
 
 const AuthContext = createContext<any>({});
 
@@ -21,19 +21,37 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const supabase = createClient();
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    // Use getUser() instead of getSession() to avoid stale refresh token errors
+    supabase.auth.getUser().then(({ data: { user }, error }) => {
+      if (error) {
+        // Clear any stale session data on auth errors
+        clearStaleAuthTokens();
+        supabase.auth.signOut().catch(() => {});
+        setUser(null);
+        setSession(null);
+      } else {
+        setUser(user ?? null);
+      }
       setLoading(false);
     });
 
     // Listen for auth changes
     const {
       data: { subscription }
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+        setSession(session);
+        setUser(session?.user ?? null);
+      } else if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setUser(null);
+      } else if (event === 'USER_UPDATED') {
+        setSession(session);
+        setUser(session?.user ?? null);
+      } else {
+        setSession(session);
+        setUser(session?.user ?? null);
+      }
       setLoading(false);
     });
 
