@@ -50,6 +50,24 @@ const getToken = () =>
     c.name.includes('auth-token')
   )?.value ?? null;
 
+// Clear all stale Supabase auth tokens from storage
+export const clearStaleAuthTokens = () => {
+  if (typeof document === 'undefined') return;
+  // Clear cookies
+  document.cookie.split(';').forEach((c) => {
+    const name = c.trim().split('=')[0];
+    if (name.includes('auth-token') || name.startsWith('sb-')) {
+      document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=None; Secure`;
+    }
+  });
+  // Clear localStorage
+  try {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith(PFX) || k.startsWith('sb-'))
+      .forEach((k) => localStorage.removeItem(k));
+  } catch {}
+};
+
 if (typeof window !== 'undefined' && !(window as any).__sb_patched__) {
   (window as any).__sb_patched__ = true;
   const orig = window.fetch.bind(window);
@@ -76,6 +94,11 @@ export function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+      },
       cookies: {
         getAll: () => (canUseCookies() ? fromCookies() : fromStorage()),
         setAll(cookiesToSet) {
