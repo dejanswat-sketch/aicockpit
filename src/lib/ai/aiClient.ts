@@ -1,4 +1,11 @@
-export async function callAIEndpoint(endpoint: string, payload: object, retries = 4) {
+const RETRY_DELAY_MS = 2000;
+const MAX_RETRIES = 3;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function callAIEndpoint(endpoint: string, payload: object, retries = MAX_RETRIES) {
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -11,19 +18,29 @@ export async function callAIEndpoint(endpoint: string, payload: object, retries 
 
       const data = await response.json();
 
-      // Check both HTTP status and body statusCode for 503/429 (service unavailable / rate limit)
-      const isRetryableStatus =
+      // Detect 503 (Service Unavailable) from HTTP status or response body
+      const is503 =
         response.status === 503 ||
+        data?.statusCode === 503;
+
+      if (is503 && attempt < retries) {
+        console.warn(
+          `Gemini API returned 503 (attempt ${attempt + 1}/${retries + 1}), retrying in ${RETRY_DELAY_MS}ms...`
+        );
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+
+      // Detect 429 (Rate Limit) — also retry with 2s delay
+      const is429 =
         response.status === 429 ||
-        data?.statusCode === 503 ||
         data?.statusCode === 429;
 
-      if (isRetryableStatus && attempt < retries) {
-        const delay = 2000 * Math.pow(2, attempt); // 2s, 4s, 8s, 16s
+      if (is429 && attempt < retries) {
         console.warn(
-          `AI service unavailable (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms...`
+          `Gemini API rate limited (attempt ${attempt + 1}/${retries + 1}), retrying in ${RETRY_DELAY_MS}ms...`
         );
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await sleep(RETRY_DELAY_MS);
         continue;
       }
 
@@ -39,15 +56,14 @@ export async function callAIEndpoint(endpoint: string, payload: object, retries 
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < retries) {
-        const delay = 2000 * Math.pow(2, attempt);
         console.warn(
-          `Request error (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms...`
+          `Network error (attempt ${attempt + 1}/${retries + 1}), retrying in ${RETRY_DELAY_MS}ms...`
         );
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await sleep(RETRY_DELAY_MS);
       }
     }
   }
 
-  console.error('API request error:', lastError);
+  console.error('All retry attempts exhausted:', lastError);
   throw lastError;
 }
