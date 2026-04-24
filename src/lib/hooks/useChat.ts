@@ -14,6 +14,7 @@ export function useChat(provider: string, model: string, streaming: boolean = tr
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
+      setIsLoading(false);
     }
   }, []);
 
