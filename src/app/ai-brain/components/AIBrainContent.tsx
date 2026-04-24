@@ -120,27 +120,12 @@ export default function AIBrainContent() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Track if we've already added the streaming response to messages
   const streamingMsgIdRef = useRef<string | null>(null);
-  const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [showCancel, setShowCancel] = useState(false);
 
   const { response, isLoading, error, sendMessage: sendGeminiMessage, abort } = useChat(
     'GEMINI',
     'gemini/gemini-2.5-flash',
     true
   );
-
-  // Keep Cancel button visible for 4s after loading stops (e.g. on error)
-  useEffect(() => {
-    if (isLoading) {
-      if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
-      setShowCancel(true);
-    } else {
-      cancelTimerRef.current = setTimeout(() => setShowCancel(false), 4000);
-    }
-    return () => {
-      if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
-    };
-  }, [isLoading]);
 
   useEffect(() => {
     if (error) toast.error(error.message);
@@ -557,19 +542,17 @@ export default function AIBrainContent() {
             <div className="flex items-center justify-between px-4 pb-3">
               <span className="text-[10px] font-mono text-zinc-700">⏎ Send · Shift+⏎ New line</span>
               <div className="flex items-center gap-2">
-                {showCancel && (
-                  <button
-                    onClick={() => {
-                      abort();
-                      streamingMsgIdRef.current = null;
-                      setShowCancel(false);
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-lg text-xs font-600 hover:bg-red-500/10 hover:border-red-500/40 hover:text-red-400 active:scale-95 transition-all duration-150"
-                  >
-                    <X size={12} />
-                    Cancel
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    abort();
+                    streamingMsgIdRef.current = null;
+                  }}
+                  disabled={!isLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-lg text-xs font-600 hover:bg-red-500/10 hover:border-red-500/40 hover:text-red-400 active:scale-95 transition-all duration-150 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-zinc-800 disabled:hover:border-zinc-700 disabled:hover:text-zinc-400"
+                >
+                  <X size={12} />
+                  Cancel
+                </button>
                 <button
                   onClick={() => sendMessage()}
                   disabled={!input.trim() || isLoading}
