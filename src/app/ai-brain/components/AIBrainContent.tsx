@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Brain, Send, Sparkles, FileText, Copy, RotateCcw, Loader2, Plus, CheckCircle2, Radio, Archive, MessageSquare, Zap, User } from 'lucide-react';
+import { Brain, Send, Sparkles, FileText, Copy, RotateCcw, Loader2, Plus, CheckCircle2, Radio, Archive, MessageSquare, Zap, User, Key, X, Eye, EyeOff } from 'lucide-react';
 import { useChat } from '@/lib/hooks/useChat';
 
 interface Message {
@@ -110,6 +110,10 @@ export default function AIBrainContent() {
   const [input, setInput] = useState('');
   const [vaultDocs, setVaultDocs] = useState(VAULT_DOCS);
   const [showVaultPicker, setShowVaultPicker] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [savingKey, setSavingKey] = useState(false);
   // Track conversation history for multi-turn (excluding welcome message)
   const [conversationHistory, setConversationHistory] = useState<Array<{ role: string; content: string }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -229,8 +233,109 @@ export default function AIBrainContent() {
     setVaultDocs((prev) => prev.map((d) => (d.id === id ? { ...d, selected: !d.selected } : d)));
   };
 
+  const saveApiKey = async () => {
+    const trimmed = apiKeyInput.trim();
+    if (!trimmed) {
+      toast.error('Please enter a valid API key');
+      return;
+    }
+    setSavingKey(true);
+    try {
+      const res = await fetch('/api/settings/gemini-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: trimmed }),
+      });
+      if (!res.ok) throw new Error('Failed to save key');
+      toast.success('Gemini API key updated successfully');
+      setShowApiKeyModal(false);
+      setApiKeyInput('');
+    } catch {
+      toast.error('Failed to save API key. Please try again.');
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
   return (
     <div className="flex h-full">
+      {/* API Key Modal */}
+      {showApiKeyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-teal-400/15 flex items-center justify-center">
+                  <Key size={15} className="text-teal-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-600 text-zinc-100">Gemini API Key</p>
+                  <p className="text-[10px] text-zinc-500">Update your Google Gemini API key</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setShowApiKeyModal(false); setApiKeyInput(''); }}
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-[11px] font-medium text-zinc-400 uppercase tracking-widest mb-2">
+                API Key
+              </label>
+              <div className="relative">
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveApiKey(); }}
+                  placeholder="AIza..."
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 pr-10 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 focus:ring-1 focus:ring-teal-400/10 transition-all font-mono"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              <p className="mt-2 text-[10px] text-zinc-600">
+                Get your key at{' '}
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-teal-400 hover:text-teal-300 underline"
+                >
+                  aistudio.google.com
+                </a>
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowApiKeyModal(false); setApiKeyInput(''); }}
+                className="flex-1 px-4 py-2 bg-zinc-800 border border-zinc-700 text-zinc-400 text-sm rounded-lg hover:bg-zinc-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveApiKey}
+                disabled={!apiKeyInput.trim() || savingKey}
+                className="flex-1 px-4 py-2 bg-teal-400 text-zinc-900 text-sm font-600 rounded-lg hover:bg-teal-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+              >
+                {savingKey ? <Loader2 size={13} className="animate-spin" /> : <Key size={13} />}
+                Save Key
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Left context panel */}
       <div className="w-72 flex-shrink-0 border-r border-zinc-800 flex flex-col bg-zinc-900/50">
         {/* Header */}
@@ -244,6 +349,13 @@ export default function AIBrainContent() {
               <p className="text-[10px] font-mono text-zinc-600">Gemini 2.5 Flash · Active</p>
             </div>
             <span className="ml-auto w-2 h-2 rounded-full bg-teal-400 animate-pulse-teal" />
+            <button
+              onClick={() => setShowApiKeyModal(true)}
+              title="Update Gemini API Key"
+              className="w-6 h-6 flex items-center justify-center rounded-md text-zinc-600 hover:text-teal-400 hover:bg-teal-400/10 transition-colors"
+            >
+              <Key size={13} />
+            </button>
           </div>
         </div>
 
