@@ -121,7 +121,7 @@ export default function AIBrainContent() {
   // Track if we've already added the streaming response to messages
   const streamingMsgIdRef = useRef<string | null>(null);
 
-  const { response, isLoading, error, sendMessage: sendGeminiMessage } = useChat(
+  const { response, isLoading, error, sendMessage: sendGeminiMessage, abort } = useChat(
     'GEMINI',
     'gemini/gemini-2.5-flash',
     true
@@ -541,14 +541,28 @@ export default function AIBrainContent() {
             />
             <div className="flex items-center justify-between px-4 pb-3">
               <span className="text-[10px] font-mono text-zinc-700">⏎ Send · Shift+⏎ New line</span>
-              <button
-                onClick={() => sendMessage()}
-                disabled={!input.trim() || isLoading}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-400 text-zinc-900 rounded-lg text-xs font-600 hover:bg-teal-300 active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-teal-400"
-              >
-                {isLoading ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-                Send
-              </button>
+              <div className="flex items-center gap-2">
+                {isLoading && (
+                  <button
+                    onClick={() => {
+                      abort();
+                      streamingMsgIdRef.current = null;
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-lg text-xs font-600 hover:bg-red-500/10 hover:border-red-500/40 hover:text-red-400 active:scale-95 transition-all duration-150"
+                  >
+                    <X size={12} />
+                    Cancel
+                  </button>
+                )}
+                <button
+                  onClick={() => sendMessage()}
+                  disabled={!input.trim() || isLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-400 text-zinc-900 rounded-lg text-xs font-600 hover:bg-teal-300 active:scale-95 transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-teal-400"
+                >
+                  {isLoading ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                  Send
+                </button>
+              </div>
             </div>
           </div>
         </div>
