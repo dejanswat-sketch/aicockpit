@@ -16,7 +16,8 @@ function injectTokenFromHeader(request: NextRequest): void {
 
 const ALLOWED_EMAILS = ['dejanwarrior@gmail.com', 'dejanswat@gmail.com'];
 const PROTECTED_ROUTES = ['/radar', '/ai-brain', '/vault', '/laboratorija', '/submissions'];
-const AUTH_ROUTES = ['/login', '/register'];
+const AUTH_ROUTES = ['/login'];
+const BLOCKED_ROUTES = ['/register'];
 const PUBLIC_ROUTES = ['/access-denied', '/auth/callback', '/update-password'];
 
 export async function middleware(request: NextRequest) {
@@ -25,6 +26,13 @@ export async function middleware(request: NextRequest) {
   // ── BYPASS: /auth/callback must pass through BEFORE any session check ──
   if (pathname.startsWith('/auth/callback')) {
     return NextResponse.next();
+  }
+
+  // ── BLOCK: /register is disabled — redirect to login ──
+  if (BLOCKED_ROUTES.some((r) => pathname.startsWith(r))) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/login';
+    return NextResponse.redirect(url);
   }
 
   injectTokenFromHeader(request);

@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Brain, Send, Sparkles, FileText, Copy, RotateCcw, Loader2, CheckCircle2, Radio, Archive, MessageSquare, Zap, User, Key, X, Eye, EyeOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { useChat } from '@/lib/hooks/useChat';
-import { vaultDocumentsService, chatAnalysesService, type VaultDocument, type ChatAnalysis } from '@/lib/services/cockpitService';
+import { vaultDocumentsService, chatAnalysesService, jobListingsService, type VaultDocument, type ChatAnalysis, type JobListing } from '@/lib/services/cockpitService';
 
 interface Message {
   id: string;
@@ -30,14 +30,6 @@ interface ActiveListing {
   skills: string[];
 }
 
-const ACTIVE_LISTING: ActiveListing = {
-  id: 'job-001',
-  title: 'Senior React Developer for FinTech Dashboard Redesign',
-  budget: '$3,500–$6,000',
-  matchScore: 94,
-  skills: ['React', 'TypeScript', 'Tailwind CSS', 'REST API', 'Figma'],
-};
-
 const QUICK_PROMPTS = [
   { id: 'qp-analyze', label: 'Analyze Match', prompt: 'Analyze my fit for this job listing based on my CV and portfolio. Give me a detailed match breakdown.' },
   { id: 'qp-proposal', label: 'Draft Proposal', prompt: "Write a compelling proposal for this job listing tailored to the client\'s requirements and my experience." },
@@ -46,19 +38,19 @@ const QUICK_PROMPTS = [
   { id: 'qp-risks', label: 'Project Risks', prompt: 'What are the potential red flags or risks in this job listing I should be aware of?' },
 ];
 
-function buildSystemPrompt(selectedDocs: VaultDoc[], listing: ActiveListing): string {
+function buildSystemPrompt(selectedDocs: VaultDoc[], listing: ActiveListing | null): string {
   const docList = selectedDocs.map((d) => {
     const tagStr = d.tags.length > 0 ? ` [tags: ${d.tags.join(', ')}]` : '';
     return `- ${d.name} (${d.type})${tagStr}`;
   }).join('\n');
 
+  const listingSection = listing
+    ? `## Active Job Listing\nTitle: ${listing.title}\nBudget: ${listing.budget}\nMatch Score: ${listing.matchScore}/100\nRequired Skills: ${listing.skills.join(', ')}`
+    : `## Active Job Listing\nNo job listing selected. Ask the user to select a job from the RADAR section.`;
+
   return `You are AI BRAIN, an expert freelance career advisor and proposal strategist integrated into a freelancer's cockpit application.
 
-## Active Job Listing
-Title: ${listing.title}
-Budget: ${listing.budget}
-Match Score: ${listing.matchScore}/100
-Required Skills: ${listing.skills.join(', ')}
+${listingSection}
 
 ## Vault Documents in Context
 The following documents from the user's Vault are loaded as context for this analysis:
@@ -103,11 +95,14 @@ function formatMessage(text: string) {
   });
 }
 
-function buildWelcomeMessage(docCount: number): Message {
+function buildWelcomeMessage(docCount: number, listing: ActiveListing | null): Message {
+  const listingText = listing
+    ? `I've loaded the active listing: **"${listing.title}"** (${listing.matchScore}% match score).`
+    : 'No job listing is selected. Go to **RADAR** and select a job to analyze.';
   return {
     id: 'msg-001',
     role: 'assistant',
-    content: `**AI BRAIN activated.** I'm connected to Google Gemini and ready to analyze job listings against your profile.\n\nI've loaded the active listing: **"Senior React Developer for FinTech Dashboard Redesign"** (94% match score).\n\n${docCount > 0 ? `I have access to **${docCount} document${docCount > 1 ? 's' : ''}** from your Vault. Toggle documents in the panel to include or exclude them from context.` : 'No Vault documents are loaded yet. Upload documents in the **Vault** section and select them here for richer analysis.'}\n\nWhat would you like me to analyze? Use the quick prompts below or ask me anything specific.`,
+    content: `**AI BRAIN activated.** I'm connected to Google Gemini and ready to analyze job listings against your profile.\n\n${listingText}\n\n${docCount > 0 ? `I have access to **${docCount} document${docCount > 1 ? 's' : ''}** from your Vault. Toggle documents in the panel to include or exclude them from context.` : 'No Vault documents are loaded yet. Upload documents in the **Vault** section and select them here for richer analysis.'}\n\nWhat would you like me to analyze? Use the quick prompts below or ask me anything specific.`,
     timestamp: '',
   };
 }
@@ -126,10 +121,20 @@ export default function AIBrainContent() {
   const [savedAnalyses, setSavedAnalyses] = useState<ChatAnalysis[]>([]);
   const [showAnalysesPanel, setShowAnalysesPanel] = useState(false);
   const [savingAnalysis, setSavingAnalysis] = useState(false);
+
+  // RADAR job listings for selection
+  const [radarJobs, setRadarJobs] = useState<JobListing[]>([]);
+  const [radarLoading, setRadarLoading] = useState(true);
+  const [activeListing, setActiveListing] = useState<ActiveListing | null>(null);
+  const [showJobPicker, setShowJobPicker] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const streamingMsgIdRef = useRef<string | null>(null);
   const lastUserPromptRef = useRef<string>('');
+  // Use a ref for selectedDocs to avoid stale closure in auto-save
+  const selectedDocsRef = useRef<VaultDoc[]>([]);
+  const activeListingRef = useRef<ActiveListing | null>(null);
 
   const { response, isLoading, error, sendMessage: sendGeminiMessage, abort } = useChat(
     'GEMINI',
@@ -148,7 +153,6 @@ export default function AIBrainContent() {
           id: doc.id,
           name: doc.name,
           type: doc.type,
-          // Auto-select first 2 docs (CV and Portfolio types preferred)
           selected: idx < 2 || doc.type === 'CV' || doc.type === 'Portfolio',
           storagePath: doc.storagePath,
           tags: doc.tags,
@@ -161,30 +165,67 @@ export default function AIBrainContent() {
     }
   }, []);
 
+  // Load RADAR job listings
+  const loadRadarJobs = useCallback(async () => {
+    try {
+      setRadarLoading(true);
+      const data = await jobListingsService.getAll();
+      setRadarJobs(data);
+      // Auto-select the first non-archived job
+      const first = data.find((j) => j.status !== 'archived') ?? data[0] ?? null;
+      if (first) {
+        const listing: ActiveListing = {
+          id: first.id,
+          title: first.title,
+          budget: first.budget,
+          matchScore: first.matchScore,
+          skills: first.skills,
+        };
+        setActiveListing(listing);
+        activeListingRef.current = listing;
+      }
+    } catch {
+      // silently fail — RADAR jobs are non-critical for AI BRAIN
+    } finally {
+      setRadarLoading(false);
+    }
+  }, []);
+
   // Load saved analyses
   const loadSavedAnalyses = useCallback(async () => {
     try {
       const data = await chatAnalysesService.getAll();
       setSavedAnalyses(data);
     } catch {
-      // silently fail — analyses panel is non-critical
+      // silently fail
     }
   }, []);
 
   useEffect(() => {
     loadVaultDocs();
+    loadRadarJobs();
     loadSavedAnalyses();
-  }, [loadVaultDocs, loadSavedAnalyses]);
+  }, [loadVaultDocs, loadRadarJobs, loadSavedAnalyses]);
 
-  // Set welcome message once vault docs are loaded
+  // Keep selectedDocsRef in sync with state
   useEffect(() => {
-    if (!vaultLoading) {
+    selectedDocsRef.current = vaultDocs.filter((d) => d.selected);
+  }, [vaultDocs]);
+
+  // Keep activeListingRef in sync with state
+  useEffect(() => {
+    activeListingRef.current = activeListing;
+  }, [activeListing]);
+
+  // Set welcome message once vault docs and radar jobs are loaded
+  useEffect(() => {
+    if (!vaultLoading && !radarLoading) {
       const selectedCount = vaultDocs.filter((d) => d.selected).length;
-      const welcome = buildWelcomeMessage(selectedCount);
+      const welcome = buildWelcomeMessage(selectedCount, activeListing);
       const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
       setMessages([{ ...welcome, timestamp: ts }]);
     }
-  }, [vaultLoading]);
+  }, [vaultLoading, radarLoading]);
 
   useEffect(() => {
     if (error) toast.error(error.message);
@@ -202,11 +243,15 @@ export default function AIBrainContent() {
     }
   }, [response]);
 
-  // When streaming finishes, finalize the message and update conversation history
+  // When streaming finishes, finalize the message and auto-save
+  // Uses refs to avoid stale closure bugs with selectedDocs and activeListing
   useEffect(() => {
     if (!isLoading && streamingMsgIdRef.current && response) {
       const finalContent = response;
       const savedPrompt = lastUserPromptRef.current;
+      // Read from refs — always current values, no stale closure
+      const currentDocs = selectedDocsRef.current;
+      const currentListing = activeListingRef.current;
       streamingMsgIdRef.current = null;
       setConversationHistory((prev) => [
         ...prev,
@@ -221,12 +266,12 @@ export default function AIBrainContent() {
           title,
           prompt: savedPrompt,
           response: finalContent,
-          jobTitle: ACTIVE_LISTING.title,
-          jobBudget: ACTIVE_LISTING.budget,
-          jobMatchScore: ACTIVE_LISTING.matchScore,
-          jobSkills: ACTIVE_LISTING.skills,
-          vaultDocIds: selectedDocs.map((d) => d.id),
-          vaultDocNames: selectedDocs.map((d) => d.name),
+          jobTitle: currentListing?.title ?? 'No listing selected',
+          jobBudget: currentListing?.budget ?? '',
+          jobMatchScore: currentListing?.matchScore ?? 0,
+          jobSkills: currentListing?.skills ?? [],
+          vaultDocIds: currentDocs.map((d) => d.id),
+          vaultDocNames: currentDocs.map((d) => d.name),
         }).then((saved) => {
           if (saved) {
             setSavedAnalyses((prev) => [saved, ...prev]);
@@ -276,7 +321,7 @@ export default function AIBrainContent() {
     const updatedHistory = [...conversationHistory, { role: 'user', content: messageText }];
     setConversationHistory(updatedHistory);
 
-    const systemPrompt = buildSystemPrompt(selectedDocs, ACTIVE_LISTING);
+    const systemPrompt = buildSystemPrompt(selectedDocs, activeListing);
     const apiMessages = [
       { role: 'system', content: systemPrompt },
       ...updatedHistory,
@@ -299,7 +344,7 @@ export default function AIBrainContent() {
 
   const clearChat = () => {
     const selectedCount = vaultDocs.filter((d) => d.selected).length;
-    const welcome = buildWelcomeMessage(selectedCount);
+    const welcome = buildWelcomeMessage(selectedCount, activeListing);
     const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     setMessages([{ ...welcome, timestamp: ts }]);
     setConversationHistory([]);
@@ -320,6 +365,20 @@ export default function AIBrainContent() {
     setVaultDocs((prev) => prev.map((d) => ({ ...d, selected: false })));
   };
 
+  const selectJob = (job: JobListing) => {
+    const listing: ActiveListing = {
+      id: job.id,
+      title: job.title,
+      budget: job.budget,
+      matchScore: job.matchScore,
+      skills: job.skills,
+    };
+    setActiveListing(listing);
+    activeListingRef.current = listing;
+    setShowJobPicker(false);
+    toast.success(`Switched to: ${job.title}`);
+  };
+
   const saveApiKey = async () => {
     const trimmed = apiKeyInput.trim();
     if (!trimmed) {
@@ -334,7 +393,7 @@ export default function AIBrainContent() {
         body: JSON.stringify({ apiKey: trimmed }),
       });
       if (!res.ok) throw new Error('Failed to save key');
-      toast.success('Gemini API key updated successfully');
+      toast.success('Gemini API key saved to your account');
       setShowApiKeyModal(false);
       setApiKeyInput('');
     } catch {
@@ -368,7 +427,7 @@ export default function AIBrainContent() {
       content: analysis.response,
       timestamp: ts,
     };
-    setMessages([buildWelcomeMessage(selectedDocs.length), userMsg, assistantMsg].map((m) =>
+    setMessages([buildWelcomeMessage(selectedDocs.length, activeListing), userMsg, assistantMsg].map((m) =>
       m.timestamp ? m : { ...m, timestamp: ts }
     ));
     setConversationHistory([
@@ -392,7 +451,7 @@ export default function AIBrainContent() {
                 </div>
                 <div>
                   <p className="text-sm font-600 text-zinc-100">Gemini API Key</p>
-                  <p className="text-[10px] text-zinc-500">Update your Google Gemini API key</p>
+                  <p className="text-[10px] text-zinc-500">Saved securely to your account</p>
                 </div>
               </div>
               <button
@@ -453,6 +512,55 @@ export default function AIBrainContent() {
                 {savingKey ? <Loader2 size={13} className="animate-spin" /> : <Key size={13} />}
                 Save Key
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Job Picker Modal */}
+      {showJobPicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-5 w-full max-w-lg mx-4 shadow-2xl max-h-[70vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Radio size={14} className="text-teal-400" />
+                <p className="text-sm font-600 text-zinc-100">Select Active Listing</p>
+              </div>
+              <button onClick={() => setShowJobPicker(false)} className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {radarLoading ? (
+                <div className="flex items-center justify-center py-8 gap-2">
+                  <Loader2 size={14} className="text-teal-400 animate-spin" />
+                  <span className="text-xs text-zinc-500">Loading jobs...</span>
+                </div>
+              ) : radarJobs.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-xs text-zinc-500">No jobs in RADAR yet.</p>
+                  <a href="/radar" className="text-xs text-teal-400 hover:text-teal-300 mt-1 block">Go to RADAR →</a>
+                </div>
+              ) : (
+                radarJobs.map((job) => (
+                  <button
+                    key={job.id}
+                    onClick={() => selectJob(job)}
+                    className={`w-full text-left p-3 rounded-lg border transition-all ${
+                      activeListing?.id === job.id
+                        ? 'bg-teal-400/10 border-teal-400/30' :'bg-zinc-800/50 border-zinc-700/50 hover:border-zinc-600'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-xs font-600 text-zinc-200 leading-snug line-clamp-2 flex-1">{job.title}</p>
+                      <span className={`flex-shrink-0 font-mono text-xs font-700 ${job.matchScore >= 85 ? 'text-emerald-400' : job.matchScore >= 70 ? 'text-teal-400' : 'text-amber-400'}`}>
+                        {job.matchScore}
+                      </span>
+                    </div>
+                    <p className="text-[10px] font-mono text-zinc-500 mt-1">{job.budget}</p>
+                  </button>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -547,25 +655,34 @@ export default function AIBrainContent() {
           </div>
         </div>
 
-        {/* Active listing */}
+        {/* Active listing — now from RADAR */}
         <div className="px-4 py-3 border-b border-zinc-800">
           <p className="text-[10px] font-medium text-zinc-600 uppercase tracking-widest mb-2">Active Listing</p>
           <div className="bg-zinc-800/60 rounded-lg p-3 border border-zinc-700/50">
-            <div className="flex items-start justify-between gap-2 mb-2">
-              <p className="text-xs font-600 text-zinc-200 leading-snug line-clamp-2">{ACTIVE_LISTING.title}</p>
-              <span className="flex-shrink-0 font-mono-data text-xs font-700 text-emerald-400">{ACTIVE_LISTING.matchScore}</span>
-            </div>
-            <p className="text-[10px] font-mono text-zinc-500 mb-2">{ACTIVE_LISTING.budget}</p>
-            <div className="flex flex-wrap gap-1">
-              {ACTIVE_LISTING.skills.slice(0, 3).map((s) => (
-                <span key={`ctx-skill-${s}`} className="px-1.5 py-0.5 bg-zinc-700/50 text-zinc-500 text-[9px] rounded">
-                  {s}
-                </span>
-              ))}
-            </div>
-            <button className="mt-2 w-full flex items-center justify-center gap-1.5 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors">
+            {activeListing ? (
+              <>
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <p className="text-xs font-600 text-zinc-200 leading-snug line-clamp-2">{activeListing.title}</p>
+                  <span className="flex-shrink-0 font-mono-data text-xs font-700 text-emerald-400">{activeListing.matchScore}</span>
+                </div>
+                <p className="text-[10px] font-mono text-zinc-500 mb-2">{activeListing.budget}</p>
+                <div className="flex flex-wrap gap-1">
+                  {activeListing.skills.slice(0, 3).map((s) => (
+                    <span key={`ctx-skill-${s}`} className="px-1.5 py-0.5 bg-zinc-700/50 text-zinc-500 text-[9px] rounded">
+                      {s}
+                    </span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-[10px] text-zinc-600 text-center py-1">No listing selected</p>
+            )}
+            <button
+              onClick={() => setShowJobPicker(true)}
+              className="mt-2 w-full flex items-center justify-center gap-1.5 text-[10px] text-zinc-500 hover:text-teal-400 transition-colors"
+            >
               <Radio size={10} />
-              Change listing
+              {activeListing ? 'Change listing' : 'Select from RADAR'}
             </button>
           </div>
         </div>
@@ -577,35 +694,18 @@ export default function AIBrainContent() {
             <div className="flex items-center gap-1.5">
               {vaultDocs.length > 0 && (
                 <>
-                  <button
-                    onClick={selectAllDocs}
-                    title="Select all documents"
-                    className="text-[10px] text-zinc-600 hover:text-teal-400 transition-colors"
-                  >
-                    All
-                  </button>
+                  <button onClick={selectAllDocs} title="Select all documents" className="text-[10px] text-zinc-600 hover:text-teal-400 transition-colors">All</button>
                   <span className="text-zinc-700 text-[10px]">·</span>
-                  <button
-                    onClick={clearAllDocs}
-                    title="Deselect all documents"
-                    className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
-                  >
-                    None
-                  </button>
+                  <button onClick={clearAllDocs} title="Deselect all documents" className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors">None</button>
                   <span className="text-zinc-700 text-[10px]">·</span>
                 </>
               )}
-              <button
-                onClick={loadVaultDocs}
-                title="Refresh vault documents"
-                className="text-zinc-600 hover:text-teal-400 transition-colors"
-              >
+              <button onClick={loadVaultDocs} title="Refresh vault documents" className="text-zinc-600 hover:text-teal-400 transition-colors">
                 <RefreshCw size={10} />
               </button>
             </div>
           </div>
 
-          {/* Vault loading state */}
           {vaultLoading && (
             <div className="flex items-center gap-2 py-4 justify-center">
               <Loader2 size={12} className="text-teal-400 animate-spin" />
@@ -613,21 +713,14 @@ export default function AIBrainContent() {
             </div>
           )}
 
-          {/* Vault error state */}
           {!vaultLoading && vaultError && (
             <div className="flex flex-col items-center gap-2 py-4">
               <AlertCircle size={14} className="text-red-400" />
               <p className="text-[10px] text-zinc-600 text-center">{vaultError}</p>
-              <button
-                onClick={loadVaultDocs}
-                className="text-[10px] text-teal-400 hover:text-teal-300 transition-colors"
-              >
-                Retry
-              </button>
+              <button onClick={loadVaultDocs} className="text-[10px] text-teal-400 hover:text-teal-300 transition-colors">Retry</button>
             </div>
           )}
 
-          {/* Empty vault state */}
           {!vaultLoading && !vaultError && vaultDocs.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-4">
               <FileText size={14} className="text-zinc-700" />
@@ -638,7 +731,6 @@ export default function AIBrainContent() {
             </div>
           )}
 
-          {/* Document list */}
           {!vaultLoading && !vaultError && vaultDocs.length > 0 && (
             <div className="space-y-1.5">
               {vaultDocs.map((doc) => (
@@ -742,7 +834,6 @@ export default function AIBrainContent() {
               key={msg.id}
               className={`flex gap-3 animate-fade-in ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
             >
-              {/* Avatar */}
               <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center ${
                 msg.role === 'assistant' ?'bg-teal-400/15 border border-teal-400/20' :'bg-zinc-700 border border-zinc-600'
               }`}>
@@ -753,7 +844,6 @@ export default function AIBrainContent() {
                 )}
               </div>
 
-              {/* Bubble */}
               <div className={`max-w-[75%] group ${msg.role === 'user' ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
                 <div className={`rounded-xl px-4 py-3 ${
                   msg.role === 'assistant' ?'bg-zinc-900 border border-zinc-800' :'bg-teal-400/10 border border-teal-400/20'
@@ -819,10 +909,7 @@ export default function AIBrainContent() {
               <span className="text-[10px] font-mono text-zinc-700">⏎ Send · Shift+⏎ New line</span>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => {
-                    abort();
-                    streamingMsgIdRef.current = null;
-                  }}
+                  onClick={() => { abort(); streamingMsgIdRef.current = null; }}
                   disabled={!isLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-lg text-xs font-600 hover:bg-red-500/10 hover:border-red-500/40 hover:text-red-400 active:scale-95 transition-all duration-150 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-zinc-800 disabled:hover:border-zinc-700 disabled:hover:text-zinc-400"
                 >

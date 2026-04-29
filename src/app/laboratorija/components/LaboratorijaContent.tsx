@@ -4,7 +4,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
 import { FileText, CheckSquare, Upload, Plus, Trash2, Check, Circle, AlertTriangle, ArrowUp, ArrowDown, Minus, File, X, Clock, Bold, Italic, List, Hash, Loader2, FolderOpen, AlertCircle } from 'lucide-react';
 
-import { tasksService, notesService, type Task, type Note } from '@/lib/services/cockpitService';
+import { tasksService, notesService, vaultDocumentsService, type Task, type Note, type VaultDocument } from '@/lib/services/cockpitService';
 import { useAuth } from '@/contexts/AuthContext';
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -17,14 +17,8 @@ interface WorkFile {
   size: string;
   uploadedAt: string;
   type: string;
+  storagePath: string | null;
 }
-
-const INITIAL_FILES: WorkFile[] = [
-  { id: 'wf-001', name: 'fintech_wireframes_v2.fig', size: '3.4 MB', uploadedAt: 'Apr 11, 2026', type: 'Design' },
-  { id: 'wf-002', name: 'proposal_draft_react_fintech.docx', size: '48 KB', uploadedAt: 'Apr 12, 2026', type: 'Document' },
-  { id: 'wf-003', name: 'colabrate_milestone2_notes.txt', size: '12 KB', uploadedAt: 'Apr 10, 2026', type: 'Text' },
-  { id: 'wf-004', name: 'rate_increase_planning.xlsx', size: '24 KB', uploadedAt: 'Apr 8, 2026', type: 'Spreadsheet' },
-];
 
 const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string; bg: string; icon: React.ElementType }> = {
   critical: { label: 'Critical', color: 'text-red-400', bg: 'bg-red-400/10 border-red-400/20', icon: AlertTriangle },
@@ -52,8 +46,9 @@ export default function LaboratorijaContent() {
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState<string | null>(null);
 
-  // Files state (local only — workspace scratch files)
-  const [files, setFiles] = useState<WorkFile[]>(INITIAL_FILES);
+  // Files state — loaded from vault_documents
+  const [files, setFiles] = useState<WorkFile[]>([]);
+  const [filesLoading, setFilesLoading] = useState(true);
   const [fileDragOver, setFileDragOver] = useState(false);
   const [fileUploading, setFileUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -97,6 +92,29 @@ export default function LaboratorijaContent() {
     })();
   }, []);
 
+  // Load vault documents as work files
+  useEffect(() => {
+    (async () => {
+      try {
+        setFilesLoading(true);
+        const data = await vaultDocumentsService.getAll();
+        setFiles(data.map((doc) => ({
+          id: doc.id,
+          name: doc.name,
+          size: doc.size,
+          uploadedAt: doc.uploadedAt,
+          type: doc.type,
+          storagePath: doc.storagePath,
+        })));
+      } catch {
+        // silently fail — files panel is non-critical
+        setFiles([]);
+      } finally {
+        setFilesLoading(false);
+      }
+    })();
+  }, []);
+
   // Autosave notes to Supabase
   useEffect(() => {
     if (saveStatus === 'saved' || !activeNote) return;
@@ -104,7 +122,7 @@ export default function LaboratorijaContent() {
     setSaveStatus('saving');
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        await notesService.update(activeNote.id, noteTitle, noteContent);
+        await notesService.update(activeNote.id, { title: noteTitle, content: noteContent });
         const now = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
         setNotes((prev) =>
           prev.map((n) => (n.id === activeNote.id ? { ...n, title: noteTitle, content: noteContent, updatedAt: now } : n))
@@ -131,7 +149,7 @@ export default function LaboratorijaContent() {
 
   const addNewNote = async () => {
     try {
-      const newNote = await notesService.create();
+      const newNote = await notesService.create({ title: 'Untitled', content: '' });
       if (newNote) {
         setNotes((prev) => [newNote, ...prev]);
         selectNote(newNote);
@@ -207,37 +225,49 @@ export default function LaboratorijaContent() {
   const filteredTasks = tasks.filter((t) => taskFilter === 'all' || t.status === taskFilter);
   const doneTasks = tasks.filter((t) => t.status === 'done').length;
 
-  // Files (local workspace scratch files)
-  const simulateFileUpload = useCallback(async (name: string, size: string) => {
+  // Files — upload to vault via vaultDocumentsService
+  const handleFileUpload = useCallback(async (file: File) => {
     setFileUploading(true);
-    await new Promise((r) => setTimeout(r, 1200));
-    const newFile: WorkFile = {
-      id: `wf-${Date.now()}`,
-      name,
-      size,
-      uploadedAt: 'Apr 12, 2026',
-      type: 'Document',
-    };
-    setFiles((prev) => [newFile, ...prev]);
-    setFileUploading(false);
-    toast.success(`"${name}" added to workspace`);
+    try {
+      const uploaded = await vaultDocumentsService.upload(file);
+      if (uploaded) {
+        setFiles((prev) => [{
+          id: uploaded.id,
+          name: uploaded.name,
+          size: uploaded.size,
+          uploadedAt: uploaded.uploadedAt,
+          type: uploaded.type,
+          storagePath: uploaded.storagePath,
+        }, ...prev]);
+        toast.success(`"${file.name}" uploaded to Vault`);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Upload failed');
+    } finally {
+      setFileUploading(false);
+    }
   }, []);
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setFileDragOver(false);
     const dropped = Array.from(e.dataTransfer.files);
-    if (dropped.length > 0) simulateFileUpload(dropped[0].name, '1.0 MB');
+    if (dropped.length > 0) handleFileUpload(dropped[0]);
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files ?? []);
-    if (picked.length > 0) simulateFileUpload(picked[0].name, '1.0 MB');
+    if (picked.length > 0) handleFileUpload(picked[0]);
   };
 
-  const deleteFile = (id: string, name: string) => {
+  const deleteFile = async (id: string, name: string, storagePath: string | null) => {
     setFiles((prev) => prev.filter((f) => f.id !== id));
-    toast.success(`"${name}" removed`);
+    try {
+      await vaultDocumentsService.delete(id, storagePath);
+      toast.success(`"${name}" removed from Vault`);
+    } catch {
+      toast.error('Failed to delete file');
+    }
   };
 
   return (
@@ -553,26 +583,30 @@ export default function LaboratorijaContent() {
           {fileUploading ? (
             <div className="flex flex-col items-center gap-1.5">
               <Loader2 size={18} className="text-violet-400 animate-spin" />
-              <p className="text-xs text-zinc-500">Uploading...</p>
+              <p className="text-xs text-zinc-500">Uploading to Vault...</p>
             </div>
           ) : (
             <>
               <Upload size={20} className={fileDragOver ? 'text-violet-400' : 'text-zinc-600'} />
               <p className="text-xs text-zinc-500 text-center">
-                {fileDragOver ? 'Drop to add' : 'Drop work files here'}
+                {fileDragOver ? 'Drop to upload' : 'Drop work files here'}
               </p>
-              <p className="text-[10px] text-zinc-700">Any file type · WIP assets</p>
+              <p className="text-[10px] text-zinc-700">Saved to Vault · Persists across sessions</p>
             </>
           )}
         </div>
 
         {/* File list */}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
-          {files.length === 0 ? (
+          {filesLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 size={16} className="text-violet-400 animate-spin" />
+            </div>
+          ) : files.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10">
               <FolderOpen size={28} className="text-zinc-700 mb-2" />
               <p className="text-xs text-zinc-600">No work files yet</p>
-              <p className="text-[10px] text-zinc-700 mt-0.5">Upload WIP assets, wireframes, drafts</p>
+              <p className="text-[10px] text-zinc-700 mt-0.5">Upload files — they persist in Vault</p>
             </div>
           ) : (
             files.map((f) => {
@@ -597,10 +631,11 @@ export default function LaboratorijaContent() {
                       <span className="text-[10px] font-mono text-zinc-600">{f.size}</span>
                       <span className="text-zinc-700">·</span>
                       <span className="text-[10px] text-zinc-600">{f.uploadedAt}</span>
+                      <span className="text-[10px] text-zinc-700">{f.type}</span>
                     </div>
                   </div>
                   <button
-                    onClick={() => deleteFile(f.id, f.name)}
+                    onClick={() => deleteFile(f.id, f.name, f.storagePath)}
                     className="opacity-0 group-hover:opacity-100 p-1.5 rounded text-zinc-700 hover:text-red-400 transition-all flex-shrink-0"
                     title="Remove file"
                     suppressHydrationWarning
