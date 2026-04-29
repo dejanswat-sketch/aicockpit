@@ -231,11 +231,13 @@ async function callGeminiWithRetry(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: 'GEMINI',
-          model: 'gemini/gemini-2.0-flash',
+          model: 'gemini/gemini-2.5-flash',
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.6,
-          max_tokens: 4096,
           stream: false,
+          parameters: {
+            temperature: 0.6,
+            max_tokens: 4096,
+          },
         }),
       });
 
