@@ -14,8 +14,10 @@ function injectTokenFromHeader(request: NextRequest): void {
   request.cookies.set(`sb-${getProjectRef()}-auth-token`, token);
 }
 
-const PROTECTED_ROUTES = ['/radar', '/ai-brain', '/vault', '/laboratorija'];
+const ALLOWED_EMAILS = ['dejanwarrior@gmail.com', 'dejanswat@gmail.com'];
+const PROTECTED_ROUTES = ['/radar', '/ai-brain', '/vault', '/laboratorija', '/submissions'];
 const AUTH_ROUTES = ['/login', '/register'];
+const PUBLIC_ROUTES = ['/access-denied'];
 
 export async function middleware(request: NextRequest) {
   injectTokenFromHeader(request);
@@ -46,6 +48,12 @@ export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const isProtected = PROTECTED_ROUTES.some((r) => pathname.startsWith(r));
   const isAuthRoute = AUTH_ROUTES.some((r) => pathname.startsWith(r));
+  const isPublic = PUBLIC_ROUTES.some((r) => pathname.startsWith(r));
+
+  // Allow public routes through without any checks
+  if (isPublic) {
+    return supabaseResponse;
+  }
 
   // Redirect unauthenticated users away from protected routes
   if (!user && isProtected) {
@@ -54,7 +62,25 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Redirect authenticated users away from auth routes
+  // Email allowlist check — signed-in users not on the list get kicked out
+  if (user) {
+    const email = user.email ?? '';
+    if (!ALLOWED_EMAILS.includes(email)) {
+      // Sign them out by clearing the session cookie, then redirect
+      const url = request.nextUrl.clone();
+      url.pathname = '/access-denied';
+      const response = NextResponse.redirect(url);
+      // Clear auth cookies so they can't re-enter
+      request.cookies.getAll().forEach((c) => {
+        if (c.name.includes('auth-token') || c.name.startsWith('sb-')) {
+          response.cookies.set(c.name, '', { maxAge: 0, path: '/' });
+        }
+      });
+      return response;
+    }
+  }
+
+  // Redirect authenticated (allowed) users away from auth routes
   if (user && isAuthRoute) {
     const url = request.nextUrl.clone();
     url.pathname = '/radar';

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import Link from 'next/link';
+
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import AppLogo from '@/components/ui/AppLogo';
@@ -126,15 +126,7 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <p className="text-center text-sm text-zinc-500 mt-6">
-            No account?{' '}
-            <Link
-              href="/register"
-              className="text-teal-400 hover:text-teal-300 font-medium transition-colors"
-            >
-              Create one
-            </Link>
-          </p>
+          {/* "Create account" link removed — private app, no public sign-ups */}
         </div>
 
         <p className="text-center text-xs text-zinc-700 mt-6 font-mono">

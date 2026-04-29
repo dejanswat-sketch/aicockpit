@@ -22,8 +22,10 @@ const fromCookies = () =>
         .split(';')
         .filter(Boolean)
         .map((c) => {
-          const [name, ...rest] = c.trim().split('=');
-          return { name: name.trim(), value: decodeURIComponent(rest.join('=')) };
+          const eqIdx = c.trim().indexOf('=');
+          const name = eqIdx >= 0 ? c.trim().slice(0, eqIdx) : c.trim();
+          const value = eqIdx >= 0 ? decodeURIComponent(c.trim().slice(eqIdx + 1)) : '';
+          return { name: name.trim(), value };
         })
         .filter((c) => c.name);
 
@@ -38,8 +40,9 @@ const fromStorage = () => {
 };
 
 const setCookie = (name: string, value: string, options?: any) => {
-  let s = `${name}=${encodeURIComponent(value)}; Path=${options?.path || '/'}; SameSite=None; Secure; Partitioned`;
-  if (options?.maxAge) s += `; Max-Age=${options.maxAge}`;
+  // Default to 1-year max-age for session persistence; override only if explicitly shorter
+  const maxAge = options?.maxAge ?? 31536000; // 1 year in seconds
+  let s = `${name}=${encodeURIComponent(value)}; Path=${options?.path || '/'}; SameSite=None; Secure; Partitioned; Max-Age=${maxAge}`;
   if (options?.domain) s += `; Domain=${options.domain}`;
   if (options?.expires) s += `; Expires=${new Date(options.expires).toUTCString()}`;
   document.cookie = s;
@@ -98,6 +101,7 @@ export function createClient() {
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: true,
+        storageKey: 'aicockpit-auth',
       },
       cookies: {
         getAll: () => (canUseCookies() ? fromCookies() : fromStorage()),
