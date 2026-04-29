@@ -72,6 +72,11 @@ Required Skills: ${listing.skills.join(', ')}
 The following documents from the user's Vault are available as context:
 ${docList || 'No documents selected.'}
 
+## Candidate Contact Info
+- Primary contact: dejanwarrior@gmail.com (email only — no phone number)
+- GitHub: https://github.com/dejanswat-sketch
+- LinkedIn: https://linkedin.com/in/dejan (optional)
+
 ## Your Role
 - Analyze job listings against the user's CV and portfolio documents
 - Draft compelling, personalized proposals
@@ -85,7 +90,8 @@ ${docList || 'No documents selected.'}
 - Use markdown formatting for structured responses (headers, bullet points, bold text)
 - Reference the specific job listing details and user's documents when relevant
 - Focus on practical, immediately usable advice
-- When analyzing match, provide specific evidence from the user's background`;
+- When analyzing match, provide specific evidence from the user's background
+- IMPORTANT: When drafting any proposal or cover letter, always end with this exact sentence: "Molim vas da me kontaktirate isključivo putem email adrese radi detaljnije diskusije o projektu."`;
 }
 
 function formatMessage(text: string) {

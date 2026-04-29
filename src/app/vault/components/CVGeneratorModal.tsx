@@ -35,7 +35,9 @@ interface STAREntry {
 interface GeneratedCV {
   name: string;
   title: string;
+  email: string;
   github: string;
+  linkedin?: string;
   projectLinks: { label: string; url: string }[];
   summary: string;
   starEntries: STAREntry[];
@@ -44,6 +46,8 @@ interface GeneratedCV {
 }
 
 const GITHUB_URL = 'https://github.com/dejanswat-sketch';
+const CONTACT_EMAIL = 'dejanwarrior@gmail.com';
+const LINKEDIN_URL = 'https://linkedin.com/in/dejan';
 
 function buildCVPrompt(projects: Project[], jobText: string): string {
   const projectList = projects
@@ -63,8 +67,11 @@ ${p.liveUrl ? `Live: ${p.liveUrl}` : ''}`
 
 ## Candidate Profile
 - Name: Dejan (Software Architect & Full-Stack Developer)
+- Email: ${CONTACT_EMAIL} (primary contact — no phone number)
 - GitHub: ${GITHUB_URL}
+- LinkedIn: ${LINKEDIN_URL} (optional)
 - Specialization: Node.js, Android Studio, Supabase, Stripe integrations, Hostinger deployment
+- Contact Note: Client contact is exclusively via email
 
 ## Selected Projects
 ${projectList}
@@ -76,7 +83,9 @@ Generate a JSON response with this exact structure:
 {
   "name": "Dejan",
   "title": "Software Architect & Full-Stack Developer",
+  "email": "${CONTACT_EMAIL}",
   "github": "${GITHUB_URL}",
+  "linkedin": "${LINKEDIN_URL}",
   "projectLinks": [{"label": "project name", "url": "url"}],
   "summary": "2-3 sentence ATS-optimized professional summary mentioning key technologies",
   "starEntries": [
@@ -97,9 +106,10 @@ Generate a JSON response with this exact structure:
 IMPORTANT: 
 - Use STAR method strictly for each project
 - rawText must be clean plain text, no markdown, no special characters
+- DO NOT include any phone number anywhere in the CV — contact is email only
+- rawText header must include: email (${CONTACT_EMAIL}), GitHub, LinkedIn, and project links
 - Emphasize architect role and efficiency/performance results
-- Include specific metrics where possible (e.g., "reduced load time by 40%")
-- rawText header must include GitHub and project links`;
+- Include specific metrics where possible (e.g., "reduced load time by 40%")`;
 }
 
 async function callGeminiWithRetry(
@@ -171,8 +181,13 @@ function downloadTextAsPDF(cv: GeneratedCV) {
 }
 
 function buildFallbackText(cv: GeneratedCV): string {
-  const links = [
+  const contactParts = [
+    `Email: ${cv.email || CONTACT_EMAIL}`,
     `GitHub: ${cv.github}`,
+  ];
+  if (cv.linkedin) contactParts.push(`LinkedIn: ${cv.linkedin}`);
+  const links = [
+    ...contactParts,
     ...cv.projectLinks.map((l) => `${l.label}: ${l.url}`),
   ].join(' | ');
 
@@ -353,10 +368,20 @@ export default function CVGeneratorModal({
                     <h3 className="text-base font-700 text-zinc-100">{generatedCV.name}</h3>
                     <p className="text-xs text-zinc-400 mt-0.5">{generatedCV.title}</p>
                     <div className="flex flex-wrap gap-2 mt-2">
+                      <a href={`mailto:${generatedCV.email || CONTACT_EMAIL}`}
+                        className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-teal-400 transition-colors">
+                        <ExternalLink size={10} /> {generatedCV.email || CONTACT_EMAIL}
+                      </a>
                       <a href={generatedCV.github} target="_blank" rel="noopener noreferrer"
                         className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-teal-400 transition-colors">
                         <GithubIcon size={10} /> {generatedCV.github}
                       </a>
+                      {generatedCV.linkedin && (
+                        <a href={generatedCV.linkedin} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-teal-400 transition-colors">
+                          <ExternalLink size={10} /> LinkedIn
+                        </a>
+                      )}
                       {generatedCV.projectLinks?.map((link) => (
                         <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer"
                           className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-teal-400 transition-colors">
