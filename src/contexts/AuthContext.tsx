@@ -1,8 +1,7 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
-import { clearStaleAuthTokens } from '@/lib/supabase/client';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createClient, clearStaleAuthTokens } from '@/lib/supabase/client';
 
 const AuthContext = createContext<any>({});
 
@@ -18,11 +17,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<any>(null);
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+  // Use ref so the same client instance is used for the lifetime of the provider
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   useEffect(() => {
-    // Use getUser() instead of getSession() to avoid stale refresh token errors
+    let mounted = true;
+
+    // Initial session check
     supabase.auth.getUser().then(({ data: { user }, error }) => {
+      if (!mounted) return;
       if (error) {
         // Clear any stale session data on auth errors
         clearStaleAuthTokens();
@@ -35,19 +39,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setLoading(false);
     });
 
-    // Listen for auth changes
+    // Listen for auth changes — registered once for the lifetime of the provider
     const {
       data: { subscription }
     } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
-        setSession(session);
-        setUser(session?.user ?? null);
-      } else if (event === 'SIGNED_OUT') {
+      if (!mounted) return;
+      if (event === 'SIGNED_OUT') {
         setSession(null);
         setUser(null);
-      } else if (event === 'USER_UPDATED') {
-        setSession(session);
-        setUser(session?.user ?? null);
       } else {
         setSession(session);
         setUser(session?.user ?? null);
@@ -55,8 +54,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setLoading(false);
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // empty deps — run once on mount only
 
   // Email/Password Sign Up
   const signUp = async (email: string, password: string, metadata = {}) => {
@@ -65,8 +68,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       password,
       options: {
         data: {
-          full_name: metadata?.fullName || '',
-          avatar_url: metadata?.avatarUrl || ''
+          full_name: (metadata as any)?.fullName || '',
+          avatar_url: (metadata as any)?.avatarUrl || ''
         },
         emailRedirectTo: `${window.location.origin}/auth/callback`
       }
