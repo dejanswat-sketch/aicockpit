@@ -52,7 +52,7 @@
     "@dhiwise/component-tagger": "^1.0.15",
     "@heroicons/react": "^2.2.0",
     "@rocketnew/llm-sdk": "^1.0.3",
-    "@supabase/supabase-js": "^2.103.0",
+    "@supabase/supabase-js": "latest",
     "@supabase/ssr": "^0.10.2",
     "@tailwindcss/forms": "^0.5.10",
     "@tailwindcss/typography": "^0.5.16",
