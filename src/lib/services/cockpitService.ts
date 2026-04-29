@@ -150,6 +150,74 @@ export const jobListingsService = {
     }
   },
 
+  async create(job: {
+    title: string;
+    client: string;
+    clientRating?: number;
+    clientSpend?: string;
+    budget: string;
+    budgetType: 'fixed' | 'hourly';
+    skills: string[];
+    description?: string;
+    category?: string;
+    matchScore?: number;
+  }): Promise<JobListing | null> {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Not authenticated');
+
+    try {
+      const { data, error } = await supabase
+        .from('job_listings')
+        .insert({
+          user_id: user.id,
+          title: job.title,
+          client: job.client,
+          client_rating: job.clientRating ?? 0,
+          client_spend: job.clientSpend ?? '',
+          budget: job.budget,
+          budget_type: job.budgetType,
+          posted: 'Just now',
+          skills: job.skills,
+          description: job.description ?? '',
+          proposals: 0,
+          match_score: job.matchScore ?? 0,
+          job_status: 'new',
+          saved: false,
+          category: job.category ?? '',
+        })
+        .select()
+        .single();
+
+      if (error) {
+        if (isSchemaError(error)) { console.error('Schema error:', error.message); throw error; }
+        console.log('Data error:', error.message);
+        return null;
+      }
+
+      return {
+        id: data.id,
+        title: data.title,
+        client: data.client,
+        clientRating: data.client_rating,
+        clientSpend: data.client_spend,
+        budget: data.budget,
+        budgetType: data.budget_type as 'fixed' | 'hourly',
+        posted: data.posted,
+        skills: data.skills || [],
+        description: data.description,
+        proposals: data.proposals,
+        matchScore: data.match_score,
+        status: data.job_status as JobListing['status'],
+        saved: data.saved,
+        category: data.category,
+      };
+    } catch (error: any) {
+      console.log('Schema-related error:', error.message);
+      throw error;
+    }
+  },
+
   async toggleSave(id: string, saved: boolean): Promise<void> {
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -172,6 +240,20 @@ export const jobListingsService = {
     const { error } = await supabase
       .from('job_listings')
       .update({ job_status: status })
+      .eq('id', id)
+      .eq('user_id', user.id);
+
+    if (error) { if (isSchemaError(error)) throw error; }
+  },
+
+  async delete(id: string): Promise<void> {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Not authenticated');
+
+    const { error } = await supabase
+      .from('job_listings')
+      .delete()
       .eq('id', id)
       .eq('user_id', user.id);
 

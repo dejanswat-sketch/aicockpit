@@ -26,6 +26,8 @@ import {
   X,
   RefreshCw,
   FileDown,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 import { jobListingsService, type JobListing } from '@/lib/services/cockpitService';
 
@@ -64,6 +66,28 @@ interface RSSItem {
   category: string;
   score: number;
 }
+
+interface AddJobForm {
+  title: string;
+  client: string;
+  budget: string;
+  budgetType: 'fixed' | 'hourly';
+  skills: string;
+  description: string;
+  category: string;
+  matchScore: string;
+}
+
+const EMPTY_FORM: AddJobForm = {
+  title: '',
+  client: '',
+  budget: '',
+  budgetType: 'fixed',
+  skills: '',
+  description: '',
+  category: '',
+  matchScore: '',
+};
 
 function scoreRSSItem(title: string, description: string): number {
   const text = `${title} ${description}`.toLowerCase();
@@ -152,6 +176,7 @@ interface QuickPasteResult {
 export default function RadarContent() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [listings, setListings] = useState<JobListing[]>([]);
   const [showFilters, setShowFilters] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -171,6 +196,14 @@ export default function RadarContent() {
   const [pasteAnalyzing, setPasteAnalyzing] = useState(false);
   const [pasteResult, setPasteResult] = useState<QuickPasteResult | null>(null);
   const pasteRef = useRef<HTMLTextAreaElement>(null);
+
+  // Add Job modal state
+  const [showAddJob, setShowAddJob] = useState(false);
+  const [addJobForm, setAddJobForm] = useState<AddJobForm>(EMPTY_FORM);
+  const [addJobLoading, setAddJobLoading] = useState(false);
+
+  // Delete state
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadListings = useCallback(async () => {
     try {
@@ -238,6 +271,56 @@ export default function RadarContent() {
     toast.success('Opening CV Generator with job context...');
   };
 
+  const handleAddJob = async () => {
+    if (!addJobForm.title.trim() || !addJobForm.client.trim() || !addJobForm.budget.trim()) {
+      toast.error('Title, client, and budget are required');
+      return;
+    }
+    setAddJobLoading(true);
+    try {
+      const skills = addJobForm.skills
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const newJob = await jobListingsService.create({
+        title: addJobForm.title.trim(),
+        client: addJobForm.client.trim(),
+        budget: addJobForm.budget.trim(),
+        budgetType: addJobForm.budgetType,
+        skills,
+        description: addJobForm.description.trim(),
+        category: addJobForm.category.trim(),
+        matchScore: addJobForm.matchScore ? parseInt(addJobForm.matchScore, 10) : 0,
+      });
+      if (newJob) {
+        setListings((prev) => [newJob, ...prev]);
+        toast.success('Job listing added');
+        setShowAddJob(false);
+        setAddJobForm(EMPTY_FORM);
+      } else {
+        toast.error('Failed to add job listing');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to add job listing');
+    } finally {
+      setAddJobLoading(false);
+    }
+  };
+
+  const handleDeleteJob = async (id: string) => {
+    setDeletingId(id);
+    setListings((prev) => prev.filter((l) => l.id !== id));
+    try {
+      await jobListingsService.delete(id);
+      toast.success('Job listing removed');
+    } catch (err: any) {
+      toast.error('Failed to delete listing');
+      loadListings();
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const filtered = useMemo(() => {
     return listings.filter((l) => {
       const matchSearch =
@@ -246,9 +329,10 @@ export default function RadarContent() {
         l.skills.some((s) => s.toLowerCase().includes(search.toLowerCase())) ||
         l.client.toLowerCase().includes(search.toLowerCase());
       const matchStatus = statusFilter === 'all' || l.status === statusFilter;
-      return matchSearch && matchStatus;
+      const matchFavorites = !favoritesOnly || l.saved;
+      return matchSearch && matchStatus && matchFavorites;
     });
-  }, [listings, search, statusFilter]);
+  }, [listings, search, statusFilter, favoritesOnly]);
 
   const filteredRSS = useMemo(() => {
     if (!search) return rssItems;
@@ -318,6 +402,139 @@ export default function RadarContent() {
 
   return (
     <div className="flex flex-col gap-4 flex-1">
+      {/* Add Job Modal */}
+      {showAddJob && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl flex flex-col gap-0 overflow-hidden animate-fade-in">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+              <div className="flex items-center gap-2">
+                <Plus size={15} className="text-teal-400" />
+                <span className="text-sm font-600 text-zinc-100">Add Job Listing</span>
+              </div>
+              <button
+                onClick={() => { setShowAddJob(false); setAddJobForm(EMPTY_FORM); }}
+                className="p-1 rounded text-zinc-600 hover:text-zinc-300 transition-colors"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            {/* Form */}
+            <div className="px-5 py-4 flex flex-col gap-3 overflow-y-auto max-h-[70vh]">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2 flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Job Title *</label>
+                  <input
+                    type="text"
+                    value={addJobForm.title}
+                    onChange={(e) => setAddJobForm((f) => ({ ...f, title: e.target.value }))}
+                    placeholder="e.g. Senior React Developer"
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 transition-all"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Client / Company *</label>
+                  <input
+                    type="text"
+                    value={addJobForm.client}
+                    onChange={(e) => setAddJobForm((f) => ({ ...f, client: e.target.value }))}
+                    placeholder="e.g. Acme Corp"
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 transition-all"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Category</label>
+                  <input
+                    type="text"
+                    value={addJobForm.category}
+                    onChange={(e) => setAddJobForm((f) => ({ ...f, category: e.target.value }))}
+                    placeholder="e.g. Frontend"
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 transition-all"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Budget *</label>
+                  <input
+                    type="text"
+                    value={addJobForm.budget}
+                    onChange={(e) => setAddJobForm((f) => ({ ...f, budget: e.target.value }))}
+                    placeholder="e.g. $3,000-$5,000 or $50/hr"
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 transition-all"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Budget Type</label>
+                  <div className="flex bg-zinc-950 border border-zinc-800 rounded-lg p-0.5">
+                    {(['fixed', 'hourly'] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setAddJobForm((f) => ({ ...f, budgetType: t }))}
+                        className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-all capitalize ${
+                          addJobForm.budgetType === t ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Match Score (0-99)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={99}
+                    value={addJobForm.matchScore}
+                    onChange={(e) => setAddJobForm((f) => ({ ...f, matchScore: e.target.value }))}
+                    placeholder="e.g. 85"
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 transition-all"
+                  />
+                </div>
+                <div className="col-span-2 flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Skills (comma-separated)</label>
+                  <input
+                    type="text"
+                    value={addJobForm.skills}
+                    onChange={(e) => setAddJobForm((f) => ({ ...f, skills: e.target.value }))}
+                    placeholder="e.g. React, TypeScript, Node.js"
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 transition-all"
+                  />
+                </div>
+                <div className="col-span-2 flex flex-col gap-1">
+                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Description</label>
+                  <textarea
+                    value={addJobForm.description}
+                    onChange={(e) => setAddJobForm((f) => ({ ...f, description: e.target.value }))}
+                    placeholder="Paste job description or add notes..."
+                    rows={4}
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 resize-none transition-all"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-zinc-800">
+              <button
+                onClick={() => { setShowAddJob(false); setAddJobForm(EMPTY_FORM); }}
+                className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddJob}
+                disabled={addJobLoading}
+                className="flex items-center gap-2 px-4 py-2 bg-teal-400/10 border border-teal-400/30 text-teal-400 rounded-lg text-sm font-medium hover:bg-teal-400/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {addJobLoading ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                {addJobLoading ? 'Adding...' : 'Add Listing'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Source switcher + Quick Paste toggle */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
@@ -354,6 +571,15 @@ export default function RadarContent() {
             >
               <RefreshCw size={12} className={rssLoading ? 'animate-spin' : ''} />
               Refresh
+            </button>
+          )}
+          {activeSource === 'saved' && (
+            <button
+              onClick={() => setShowAddJob(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-teal-400/10 border border-teal-400/30 text-teal-400 rounded-lg text-xs font-medium hover:bg-teal-400/20 transition-all"
+            >
+              <Plus size={13} />
+              Add Job
             </button>
           )}
           <button
@@ -492,6 +718,17 @@ export default function RadarContent() {
         {activeSource === 'saved' && (
           <>
             <button
+              onClick={() => setFavoritesOnly((v) => !v)}
+              title="Show favorites only"
+              className={`flex items-center gap-1.5 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 ${
+                favoritesOnly
+                  ? 'bg-amber-400/10 border-amber-400/30 text-amber-400' :'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'
+              }`}
+            >
+              <Bookmark size={14} className={favoritesOnly ? 'fill-amber-400' : ''} />
+              Favorites
+            </button>
+            <button
               onClick={() => setShowFilters(!showFilters)}
               className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all duration-150 ${showFilters ? 'bg-teal-400/10 border-teal-400/30 text-teal-400' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-300'}`}
             >
@@ -620,14 +857,28 @@ export default function RadarContent() {
           {filtered.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center py-20">
               <Radio size={40} className="text-zinc-700 mb-4" />
-              <p className="text-zinc-400 font-medium">No listings match your search</p>
-              <p className="text-zinc-600 text-sm mt-1">Try adjusting your search or filters</p>
-              <button
-                onClick={() => { setSearch(''); setStatusFilter('all'); }}
-                className="mt-4 px-4 py-2 bg-teal-400/10 border border-teal-400/20 text-teal-400 rounded-lg text-sm font-medium hover:bg-teal-400/20 transition-all"
-              >
-                Clear filters
-              </button>
+              <p className="text-zinc-400 font-medium">
+                {listings.length === 0 ? 'No job listings yet' : 'No listings match your search'}
+              </p>
+              <p className="text-zinc-600 text-sm mt-1">
+                {listings.length === 0 ? 'Add your first job listing to get started' : 'Try adjusting your search or filters'}
+              </p>
+              {listings.length === 0 ? (
+                <button
+                  onClick={() => setShowAddJob(true)}
+                  className="mt-4 flex items-center gap-2 px-4 py-2 bg-teal-400/10 border border-teal-400/20 text-teal-400 rounded-lg text-sm font-medium hover:bg-teal-400/20 transition-all"
+                >
+                  <Plus size={14} />
+                  Add First Job
+                </button>
+              ) : (
+                <button
+                  onClick={() => { setSearch(''); setStatusFilter('all'); setFavoritesOnly(false); }}
+                  className="mt-4 px-4 py-2 bg-teal-400/10 border border-teal-400/20 text-teal-400 rounded-lg text-sm font-medium hover:bg-teal-400/20 transition-all"
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3 pb-6">
@@ -704,7 +955,7 @@ export default function RadarContent() {
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
                         <button
                           onClick={() => toggleSave(listing.id)}
-                          title={listing.saved ? 'Unsave' : 'Save listing'}
+                          title={listing.saved ? 'Remove from favorites' : 'Add to favorites'}
                           className="p-1.5 rounded-md hover:bg-zinc-700 text-zinc-500 hover:text-amber-400 transition-all"
                         >
                           {listing.saved ? (
@@ -726,6 +977,18 @@ export default function RadarContent() {
                           className="p-1.5 rounded-md hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-all"
                         >
                           <ExternalLink size={13} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteJob(listing.id)}
+                          disabled={deletingId === listing.id}
+                          title="Delete listing"
+                          className="p-1.5 rounded-md hover:bg-red-400/10 text-zinc-600 hover:text-red-400 transition-all disabled:opacity-50"
+                        >
+                          {deletingId === listing.id ? (
+                            <Loader2 size={13} className="animate-spin" />
+                          ) : (
+                            <Trash2 size={13} />
+                          )}
                         </button>
                       </div>
                     </div>
