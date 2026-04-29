@@ -27,7 +27,11 @@ function LoginContent() {
   const [resetMessage, setResetMessage] = useState('');
 
   useEffect(() => {
-    setIsAdminMode(searchParams.get('admin') === 'true');
+    // Check both searchParams and raw window.location.search for reliability
+    const fromSearchParams = searchParams.get('admin') === 'true';
+    const fromWindowSearch =
+      typeof window !== 'undefined' && window.location.search.includes('admin=true');
+    setIsAdminMode(fromSearchParams || fromWindowSearch);
   }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
