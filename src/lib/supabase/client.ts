@@ -42,8 +42,7 @@ const fromStorage = () => {
 const setCookie = (name: string, value: string, options?: any) => {
   // Default to 1-year max-age for session persistence; override only if explicitly shorter
   const maxAge = options?.maxAge ?? 31536000; // 1 year in seconds
-  let s = `${name}=${encodeURIComponent(value)}; Path=${options?.path || '/'}; SameSite=None; Secure; Partitioned; Max-Age=${maxAge}`;
-  if (options?.domain) s += `; Domain=${options.domain}`;
+  let s = `${name}=${encodeURIComponent(value)}; Path=${options?.path || '/'}; SameSite=None; Secure; Partitioned; Max-Age=${maxAge}; Domain=nomorequiet.com`;
   if (options?.expires) s += `; Expires=${new Date(options.expires).toUTCString()}`;
   document.cookie = s;
 };

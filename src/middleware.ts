@@ -20,6 +20,13 @@ const AUTH_ROUTES = ['/login', '/register'];
 const PUBLIC_ROUTES = ['/access-denied', '/auth/callback', '/update-password'];
 
 export async function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+
+  // ── BYPASS: /auth/callback must pass through BEFORE any session check ──
+  if (pathname.startsWith('/auth/callback')) {
+    return NextResponse.next();
+  }
+
   injectTokenFromHeader(request);
   let supabaseResponse = NextResponse.next({ request });
 
@@ -45,18 +52,8 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const pathname = request.nextUrl.pathname;
-  const isProtected = PROTECTED_ROUTES.some((r) => pathname.startsWith(r));
-  const isAuthRoute = AUTH_ROUTES.some((r) => pathname.startsWith(r));
-  const isPublic = PUBLIC_ROUTES.some((r) => pathname.startsWith(r));
-
-  // Allow public routes through without any checks
-  if (isPublic) {
-    return supabaseResponse;
-  }
-
   // Redirect unauthenticated users away from protected routes
-  if (!user && isProtected) {
+  if (!user && PROTECTED_ROUTES.some((r) => pathname.startsWith(r))) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     return NextResponse.redirect(url);
@@ -81,7 +78,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Redirect authenticated (allowed) users away from auth routes
-  if (user && isAuthRoute) {
+  if (user && AUTH_ROUTES.some((r) => pathname.startsWith(r))) {
     const url = request.nextUrl.clone();
     url.pathname = '/radar';
     return NextResponse.redirect(url);
