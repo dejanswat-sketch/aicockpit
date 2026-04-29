@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Brain, Send, Sparkles, FileText, Copy, RotateCcw, Loader2, CheckCircle2, Radio, Archive, MessageSquare, Zap, User, Key, X, Eye, EyeOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { useChat } from '@/lib/hooks/useChat';
-import { vaultDocumentsService, type VaultDocument } from '@/lib/services/cockpitService';
+import { vaultDocumentsService, chatAnalysesService, type VaultDocument, type ChatAnalysis } from '@/lib/services/cockpitService';
 
 interface Message {
   id: string;
@@ -123,9 +123,13 @@ export default function AIBrainContent() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
   const [conversationHistory, setConversationHistory] = useState<Array<{ role: string; content: string }>>([]);
+  const [savedAnalyses, setSavedAnalyses] = useState<ChatAnalysis[]>([]);
+  const [showAnalysesPanel, setShowAnalysesPanel] = useState(false);
+  const [savingAnalysis, setSavingAnalysis] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const streamingMsgIdRef = useRef<string | null>(null);
+  const lastUserPromptRef = useRef<string>('');
 
   const { response, isLoading, error, sendMessage: sendGeminiMessage, abort } = useChat(
     'GEMINI',
@@ -157,9 +161,20 @@ export default function AIBrainContent() {
     }
   }, []);
 
+  // Load saved analyses
+  const loadSavedAnalyses = useCallback(async () => {
+    try {
+      const data = await chatAnalysesService.getAll();
+      setSavedAnalyses(data);
+    } catch {
+      // silently fail — analyses panel is non-critical
+    }
+  }, []);
+
   useEffect(() => {
     loadVaultDocs();
-  }, [loadVaultDocs]);
+    loadSavedAnalyses();
+  }, [loadVaultDocs, loadSavedAnalyses]);
 
   // Set welcome message once vault docs are loaded
   useEffect(() => {
@@ -191,11 +206,37 @@ export default function AIBrainContent() {
   useEffect(() => {
     if (!isLoading && streamingMsgIdRef.current && response) {
       const finalContent = response;
+      const savedPrompt = lastUserPromptRef.current;
       streamingMsgIdRef.current = null;
       setConversationHistory((prev) => [
         ...prev,
         { role: 'assistant', content: finalContent },
       ]);
+
+      // Auto-save analysis to Supabase
+      if (savedPrompt && finalContent) {
+        setSavingAnalysis(true);
+        const title = savedPrompt.length > 60 ? savedPrompt.slice(0, 57) + '...' : savedPrompt;
+        chatAnalysesService.save({
+          title,
+          prompt: savedPrompt,
+          response: finalContent,
+          jobTitle: ACTIVE_LISTING.title,
+          jobBudget: ACTIVE_LISTING.budget,
+          jobMatchScore: ACTIVE_LISTING.matchScore,
+          jobSkills: ACTIVE_LISTING.skills,
+          vaultDocIds: selectedDocs.map((d) => d.id),
+          vaultDocNames: selectedDocs.map((d) => d.name),
+        }).then((saved) => {
+          if (saved) {
+            setSavedAnalyses((prev) => [saved, ...prev]);
+          }
+        }).catch(() => {
+          // silently fail
+        }).finally(() => {
+          setSavingAnalysis(false);
+        });
+      }
     }
   }, [isLoading]);
 
@@ -208,6 +249,8 @@ export default function AIBrainContent() {
   const sendMessage = (text?: string) => {
     const messageText = text ?? input.trim();
     if (!messageText || isLoading) return;
+
+    lastUserPromptRef.current = messageText;
 
     const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -301,6 +344,41 @@ export default function AIBrainContent() {
     }
   };
 
+  const deleteAnalysis = async (id: string) => {
+    try {
+      await chatAnalysesService.delete(id);
+      setSavedAnalyses((prev) => prev.filter((a) => a.id !== id));
+      toast.success('Analysis deleted');
+    } catch {
+      toast.error('Failed to delete analysis');
+    }
+  };
+
+  const restoreAnalysis = (analysis: ChatAnalysis) => {
+    const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const userMsg: Message = {
+      id: `msg-restored-user-${analysis.id}`,
+      role: 'user',
+      content: analysis.prompt,
+      timestamp: ts,
+    };
+    const assistantMsg: Message = {
+      id: `msg-restored-ai-${analysis.id}`,
+      role: 'assistant',
+      content: analysis.response,
+      timestamp: ts,
+    };
+    setMessages([buildWelcomeMessage(selectedDocs.length), userMsg, assistantMsg].map((m) =>
+      m.timestamp ? m : { ...m, timestamp: ts }
+    ));
+    setConversationHistory([
+      { role: 'user', content: analysis.prompt },
+      { role: 'assistant', content: analysis.response },
+    ]);
+    setShowAnalysesPanel(false);
+    toast.success('Analysis restored to chat');
+  };
+
   return (
     <div className="flex h-full">
       {/* API Key Modal */}
@@ -375,6 +453,72 @@ export default function AIBrainContent() {
                 {savingKey ? <Loader2 size={13} className="animate-spin" /> : <Key size={13} />}
                 Save Key
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Saved Analyses Panel (slide-over) */}
+      {showAnalysesPanel && (
+        <div className="fixed inset-0 z-40 flex">
+          <div className="flex-1 bg-black/40" onClick={() => setShowAnalysesPanel(false)} />
+          <div className="w-96 bg-zinc-900 border-l border-zinc-800 flex flex-col h-full overflow-hidden">
+            <div className="px-5 py-4 border-b border-zinc-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Archive size={15} className="text-teal-400" />
+                <p className="text-sm font-600 text-zinc-100">Saved Analyses</p>
+                <span className="px-1.5 py-0.5 bg-zinc-800 text-zinc-500 text-[10px] font-mono rounded">
+                  {savedAnalyses.length}
+                </span>
+              </div>
+              <button
+                onClick={() => setShowAnalysesPanel(false)}
+                className="w-7 h-7 flex items-center justify-center rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+              {savedAnalyses.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-10">
+                  <Archive size={20} className="text-zinc-700" />
+                  <p className="text-xs text-zinc-600 text-center">No analyses saved yet.<br />Analyses are saved automatically after each Gemini response.</p>
+                </div>
+              ) : (
+                savedAnalyses.map((analysis) => (
+                  <div key={analysis.id} className="bg-zinc-800/50 border border-zinc-700/50 rounded-lg p-3 group">
+                    <div className="flex items-start justify-between gap-2 mb-1.5">
+                      <p className="text-xs font-600 text-zinc-200 leading-snug line-clamp-2 flex-1">{analysis.title}</p>
+                      <button
+                        onClick={() => deleteAnalysis(analysis.id)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 text-zinc-600 hover:text-red-400"
+                        title="Delete analysis"
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                    <p className="text-[10px] font-mono text-zinc-600 mb-2">
+                      {new Date(analysis.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}
+                    </p>
+                    <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                      <span className="px-1.5 py-0.5 bg-zinc-700/50 text-zinc-500 text-[9px] rounded truncate max-w-[140px]">{analysis.jobTitle}</span>
+                      {analysis.vaultDocNames.slice(0, 2).map((name, i) => (
+                        <span key={`vd-${i}`} className="px-1.5 py-0.5 bg-teal-400/10 text-teal-600 text-[9px] rounded truncate max-w-[100px]">{name}</span>
+                      ))}
+                      {analysis.vaultDocNames.length > 2 && (
+                        <span className="text-[9px] text-zinc-600">+{analysis.vaultDocNames.length - 2}</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => restoreAnalysis(analysis)}
+                      className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-zinc-700/50 hover:bg-teal-400/10 border border-zinc-700 hover:border-teal-400/30 text-zinc-500 hover:text-teal-400 text-[10px] rounded-md transition-all"
+                    >
+                      <RotateCcw size={10} />
+                      Restore to chat
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -536,13 +680,23 @@ export default function AIBrainContent() {
             <span className="text-[10px] font-mono text-zinc-600">
               <span className="text-zinc-400">{messages.length}</span> messages
             </span>
-            <button
-              onClick={clearChat}
-              className="text-[10px] text-zinc-600 hover:text-zinc-400 flex items-center gap-1 transition-colors"
-            >
-              <RotateCcw size={10} />
-              Clear
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowAnalysesPanel(true)}
+                className="text-[10px] text-zinc-600 hover:text-teal-400 flex items-center gap-1 transition-colors"
+                title="View saved analyses"
+              >
+                <Archive size={10} />
+                {savedAnalyses.length > 0 && <span className="font-mono text-teal-400">{savedAnalyses.length}</span>}
+              </button>
+              <button
+                onClick={clearChat}
+                className="text-[10px] text-zinc-600 hover:text-zinc-400 flex items-center gap-1 transition-colors"
+              >
+                <RotateCcw size={10} />
+                Clear
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -566,8 +720,17 @@ export default function AIBrainContent() {
               </div>
             )}
             <div className="flex items-center gap-2 text-xs text-zinc-600">
-              <Archive size={12} />
-              <span>Session auto-saved</span>
+              {savingAnalysis ? (
+                <>
+                  <Loader2 size={12} className="animate-spin text-teal-400" />
+                  <span className="text-teal-400">Saving...</span>
+                </>
+              ) : (
+                <>
+                  <Archive size={12} />
+                  <span>Auto-saved to Supabase</span>
+                </>
+              )}
             </div>
           </div>
         </div>

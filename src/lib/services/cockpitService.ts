@@ -51,6 +51,20 @@ export interface Note {
   updatedAt: string;
 }
 
+export interface ChatAnalysis {
+  id: string;
+  title: string;
+  prompt: string;
+  response: string;
+  jobTitle: string;
+  jobBudget: string;
+  jobMatchScore: number;
+  jobSkills: string[];
+  vaultDocIds: string[];
+  vaultDocNames: string[];
+  createdAt: string;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 function formatBytes(bytes: number): string {
@@ -645,6 +659,120 @@ export const notesService = {
 
     const { error } = await supabase
       .from('notes')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id);
+
+    if (error) { if (isSchemaError(error)) throw error; }
+  },
+};
+
+// ── Chat Analyses Service ──────────────────────────────────────────────
+
+export const chatAnalysesService = {
+  async getAll(): Promise<ChatAnalysis[]> {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Not authenticated');
+
+    try {
+      const { data, error } = await supabase
+        .from('chat_analyses')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) {
+        if (isSchemaError(error)) { console.error('Schema error:', error.message); throw error; }
+        console.log('Data error:', error.message);
+        return [];
+      }
+
+      return (data || []).map((row) => ({
+        id: row.id,
+        title: row.title,
+        prompt: row.prompt,
+        response: row.response,
+        jobTitle: row.job_title,
+        jobBudget: row.job_budget,
+        jobMatchScore: row.job_match_score,
+        jobSkills: row.job_skills || [],
+        vaultDocIds: row.vault_doc_ids || [],
+        vaultDocNames: row.vault_doc_names || [],
+        createdAt: row.created_at,
+      }));
+    } catch (error: any) {
+      console.log('Schema-related error:', error.message);
+      throw error;
+    }
+  },
+
+  async save(analysis: {
+    title: string;
+    prompt: string;
+    response: string;
+    jobTitle: string;
+    jobBudget: string;
+    jobMatchScore: number;
+    jobSkills: string[];
+    vaultDocIds: string[];
+    vaultDocNames: string[];
+  }): Promise<ChatAnalysis | null> {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Not authenticated');
+
+    try {
+      const { data, error } = await supabase
+        .from('chat_analyses')
+        .insert({
+          user_id: user.id,
+          title: analysis.title,
+          prompt: analysis.prompt,
+          response: analysis.response,
+          job_title: analysis.jobTitle,
+          job_budget: analysis.jobBudget,
+          job_match_score: analysis.jobMatchScore,
+          job_skills: analysis.jobSkills,
+          vault_doc_ids: analysis.vaultDocIds,
+          vault_doc_names: analysis.vaultDocNames,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        if (isSchemaError(error)) { console.error('Schema error:', error.message); throw error; }
+        console.log('Data error:', error.message);
+        return null;
+      }
+
+      return {
+        id: data.id,
+        title: data.title,
+        prompt: data.prompt,
+        response: data.response,
+        jobTitle: data.job_title,
+        jobBudget: data.job_budget,
+        jobMatchScore: data.job_match_score,
+        jobSkills: data.job_skills || [],
+        vaultDocIds: data.vault_doc_ids || [],
+        vaultDocNames: data.vault_doc_names || [],
+        createdAt: data.created_at,
+      };
+    } catch (error: any) {
+      console.log('Schema-related error:', error.message);
+      throw error;
+    }
+  },
+
+  async delete(id: string): Promise<void> {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Not authenticated');
+
+    const { error } = await supabase
+      .from('chat_analyses')
       .delete()
       .eq('id', id)
       .eq('user_id', user.id);
