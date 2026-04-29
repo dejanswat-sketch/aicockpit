@@ -114,6 +114,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             setLoading(false);
             // Wipe any leftover sb-* / lock:* entries after sign-out
             clearStaleAuthTokens();
+            // Redirect to login if not already there
+            if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+              window.location.href = '/login';
+            }
             break;
 
           default:
@@ -123,40 +127,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
       });
 
-      // Intercept token refresh errors at the fetch level to catch
-      // refresh_token_not_found responses that Supabase may not surface
-      // as auth state change events.
-      const originalFetch = window.fetch;
-      window.fetch = async (...args) => {
-        const response = await originalFetch(...args);
-        // Clone to read body without consuming the original stream
-        if (!response.ok) {
-          try {
-            const clone = response.clone();
-            const text = await clone.text();
-            if (isRefreshTokenError(text)) {
-              forceLogout();
-            }
-          } catch {
-            // ignore body-read errors
-          }
-        }
-        return response;
-      };
-
-      // Listen for Supabase auth errors emitted on the client
-      supabase.auth.onAuthStateChange((event, _session) => {
-        if (event === 'SIGNED_OUT') {
-          // Already handled above; no-op here
-        }
-      });
-
       // Cleanup
       const cleanup = () => {
         mounted = false;
         subscription.unsubscribe();
-        // Restore original fetch
-        window.fetch = originalFetch;
       };
 
       // Store cleanup on the timer ref so the outer cleanup can call it
