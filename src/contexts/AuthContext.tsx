@@ -110,8 +110,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
           case 'TOKEN_REFRESH_FAILED':
             // Supabase fires this when the refresh token is invalid/not found.
-            // Immediately wipe storage and redirect to break the retry loop.
-            forceLogout();
+            // Sign out locally first to stop the internal retry loop, then wipe
+            // storage and redirect to /login.
+            supabase.auth.signOut({ scope: 'local' }).finally(() => {
+              forceLogout();
+            });
             break;
 
           case 'SIGNED_OUT':

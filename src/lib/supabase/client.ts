@@ -34,7 +34,20 @@ export function createClient() {
 
   clientInstance = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      auth: {
+        // Automatically refresh tokens — Supabase will fire TOKEN_REFRESH_FAILED
+        // when the refresh token is invalid, at which point AuthContext handles cleanup.
+        autoRefreshToken: true,
+        // Persist session in localStorage so the singleton survives page reloads.
+        persistSession: true,
+        // Suppress the default console.error output for auth errors so that
+        // refresh_token_not_found errors don't flood the console while
+        // TOKEN_REFRESH_FAILED is being handled.
+        debug: false,
+      },
+    }
   );
 
   return clientInstance;
