@@ -105,7 +105,7 @@ IMPORTANT:
 async function callGeminiWithRetry(
   prompt: string,
   retries = 3,
-  delayMs = 1500
+  delayMs = 3000
 ): Promise<string> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -114,7 +114,7 @@ async function callGeminiWithRetry(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: 'GEMINI',
-          model: 'gemini/gemini-2.5-flash',
+          model: 'gemini/gemini-2.0-flash',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.6,
           max_tokens: 4096,
@@ -127,7 +127,12 @@ async function callGeminiWithRetry(
           await new Promise((r) => setTimeout(r, delayMs * attempt));
           continue;
         }
-        throw new Error(`Gemini API unavailable after ${retries} attempts`);
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData?.details || errData?.error || '';
+        if (res.status === 429) {
+          throw new Error('Gemini free tier quota exceeded. Please wait a minute and try again, or upgrade your Gemini API plan.');
+        }
+        throw new Error(`Gemini API unavailable after ${retries} attempts. Please try again shortly.`);
       }
 
       if (!res.ok) throw new Error(`API error: ${res.status}`);
