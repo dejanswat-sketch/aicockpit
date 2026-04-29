@@ -2,6 +2,49 @@
 
 import { createClient } from '@/lib/supabase/client';
 
+// ── Refresh-token guard ────────────────────────────────────────────────
+
+/**
+ * Retrieves the current authenticated user.
+ * If the refresh token is invalid/not found, wipes all auth storage and
+ * redirects to /login to break the repeated-retry loop.
+ */
+async function getAuthenticatedUser() {
+  const supabase = createClient();
+  const { data, error } = await supabase.auth.getUser();
+
+  if (error) {
+    const msg = error.message?.toLowerCase() ?? '';
+    const isStaleToken =
+      msg.includes('refresh_token_not_found') ||
+      msg.includes('invalid refresh token') ||
+      msg.includes('token has expired') ||
+      msg.includes('refresh token not found') ||
+      (error as any).status === 400;
+
+    if (isStaleToken && typeof window !== 'undefined') {
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+        document.cookie.split(';').forEach((c) => {
+          const name = c.trim().split('=')[0];
+          if (name.startsWith('sb-') || name.includes('auth-token')) {
+            document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+          }
+        });
+      } catch {
+        // storage unavailable
+      }
+      window.location.href = '/login';
+      // Return null — the redirect will happen asynchronously
+      return null;
+    }
+    return null;
+  }
+
+  return data.user ?? null;
+}
+
 // ── Types ──────────────────────────────────────────────────────────────
 
 export interface JobListing {
@@ -137,7 +180,7 @@ function isSchemaError(error: any): boolean {
 export const jobListingsService = {
   async getAll(): Promise<JobListing[]> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -189,7 +232,7 @@ export const jobListingsService = {
     matchScore?: number;
   }): Promise<JobListing | null> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -246,7 +289,7 @@ export const jobListingsService = {
 
   async toggleSave(id: string, saved: boolean): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
@@ -260,7 +303,7 @@ export const jobListingsService = {
 
   async updateStatus(id: string, status: JobListing['status']): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
@@ -274,7 +317,7 @@ export const jobListingsService = {
 
   async delete(id: string): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
@@ -292,7 +335,7 @@ export const jobListingsService = {
 export const vaultDocumentsService = {
   async getAll(): Promise<VaultDocument[]> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -328,7 +371,7 @@ export const vaultDocumentsService = {
 
   async upload(file: File, type?: VaultDocument['type']): Promise<VaultDocument | null> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     // Build a unique storage path: {userId}/{timestamp}-{filename}
@@ -397,7 +440,7 @@ export const vaultDocumentsService = {
 
   async create(doc: { name: string; sizeBytes: number; type?: VaultDocument['type'] }): Promise<VaultDocument | null> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -449,7 +492,7 @@ export const vaultDocumentsService = {
 
   async delete(id: string, storagePath?: string | null): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     // Delete DB record first
@@ -473,7 +516,7 @@ export const vaultDocumentsService = {
 export const tasksService = {
   async getAll(): Promise<Task[]> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -505,7 +548,7 @@ export const tasksService = {
 
   async create(task: { text: string; priority: Task['priority']; dueDate?: string; project?: string }): Promise<Task | null> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -544,7 +587,7 @@ export const tasksService = {
 
   async updateStatus(id: string, status: Task['status']): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
@@ -558,7 +601,7 @@ export const tasksService = {
 
   async delete(id: string): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
@@ -576,7 +619,7 @@ export const tasksService = {
 export const notesService = {
   async getAll(): Promise<Note[]> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -606,7 +649,7 @@ export const notesService = {
 
   async create(note: { title: string; content: string }): Promise<Note | null> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -640,7 +683,7 @@ export const notesService = {
 
   async update(id: string, updates: { title?: string; content?: string }): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
@@ -654,7 +697,7 @@ export const notesService = {
 
   async delete(id: string): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
@@ -672,7 +715,7 @@ export const notesService = {
 export const chatAnalysesService = {
   async getAll(): Promise<ChatAnalysis[]> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -720,7 +763,7 @@ export const chatAnalysesService = {
     vaultDocNames: string[];
   }): Promise<ChatAnalysis | null> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     try {
@@ -768,7 +811,7 @@ export const chatAnalysesService = {
 
   async delete(id: string): Promise<void> {
     const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
