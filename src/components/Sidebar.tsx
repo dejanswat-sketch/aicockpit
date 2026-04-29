@@ -21,6 +21,7 @@ import {
   Palette,
   Globe,
   Shield,
+  Send,
 } from 'lucide-react';
 import Icon from '@/components/ui/AppIcon';
 
@@ -38,6 +39,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'nav-radar', label: 'RADAR', route: '/radar', icon: Radio, badge: 3, section: 'cockpit' },
   { id: 'nav-ai-brain', label: 'AI BRAIN', route: '/ai-brain', icon: Brain, section: 'cockpit' },
   { id: 'nav-vault', label: 'VAULT', route: '/vault', icon: Archive, section: 'cockpit' },
+  { id: 'nav-submissions', label: 'SUBMISSIONS', route: '/submissions', icon: Send, section: 'cockpit' },
   { id: 'nav-laboratorija', label: 'LABORATORIJA', route: '/laboratorija', icon: FlaskConical, section: 'cockpit' },
 ];
 
