@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Search, Upload, FileText, Trash2, Brain, Eye, Download, MoreHorizontal, FolderOpen, Clock, HardDrive, Tag, Plus, Loader2, AlertCircle, Briefcase, FileDown } from 'lucide-react';
+import { Search, Upload, FileText, Trash2, Brain, Eye, Download, MoreHorizontal, FolderOpen, Clock, HardDrive, Tag, Plus, Loader2, AlertCircle, Briefcase, FileDown, Key, CheckCircle, EyeOff } from 'lucide-react';
 
 import { vaultDocumentsService, type VaultDocument } from '@/lib/services/cockpitService';
 import PortfolioSection, { PORTFOLIO_PROJECTS, type Project } from './PortfolioSection';
@@ -34,6 +34,9 @@ export default function VaultContent() {
   const [cvModalOpen, setCvModalOpen] = useState(false);
   const [cvSelectedProjects, setCvSelectedProjects] = useState<Project[]>([]);
   const [cvJobText, setCvJobText] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
+  const [geminiKeyVisible, setGeminiKeyVisible] = useState(false);
+  const [savingKey, setSavingKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadDocuments = useCallback(async () => {
@@ -127,6 +130,29 @@ export default function VaultContent() {
     setCvModalOpen(true);
   };
 
+  const handleSaveGeminiKey = async () => {
+    if (!geminiKey.trim()) {
+      toast.error('Please enter a valid API key');
+      return;
+    }
+    setSavingKey(true);
+    try {
+      const res = await fetch('/api/settings/gemini-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: geminiKey.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save key');
+      toast.success('Gemini API key updated successfully');
+      setGeminiKey('');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to save Gemini API key');
+    } finally {
+      setSavingKey(false);
+    }
+  };
+
   const types = Array.from(new Set(documents.map((d) => d.type)));
 
   if (loading) {
@@ -176,6 +202,50 @@ export default function VaultContent() {
             </div>
           );
         })}
+      </div>
+
+      {/* Gemini API Key Settings */}
+      <div className="cockpit-card p-4 flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-blue-400/10 flex items-center justify-center flex-shrink-0">
+            <Key size={14} className="text-blue-400" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-zinc-200">Gemini API Key</p>
+            <p className="text-[10px] text-zinc-600">Update your Google Gemini API key</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              type={geminiKeyVisible ? 'text' : 'password'}
+              placeholder="Paste new Gemini API key..."
+              value={geminiKey}
+              onChange={(e) => setGeminiKey(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveGeminiKey()}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-3 pr-10 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-blue-400/50 font-mono transition-all"
+            />
+            <button
+              type="button"
+              onClick={() => setGeminiKeyVisible((v) => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors"
+            >
+              {geminiKeyVisible ? <EyeOff size={13} /> : <Eye size={13} />}
+            </button>
+          </div>
+          <button
+            onClick={handleSaveGeminiKey}
+            disabled={savingKey || !geminiKey.trim()}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-400/10 border border-blue-400/20 text-blue-400 rounded-lg text-xs font-medium hover:bg-blue-400/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+          >
+            {savingKey ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <CheckCircle size={12} />
+            )}
+            {savingKey ? 'Saving...' : 'Save Key'}
+          </button>
+        </div>
       </div>
 
       {/* Tab switcher */}
