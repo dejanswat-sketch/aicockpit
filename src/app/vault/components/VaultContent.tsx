@@ -72,21 +72,24 @@ export default function VaultContent() {
     return `${(bytes / 1000000).toFixed(1)} MB`;
   }
 
-  const handleUpload = useCallback(async (fileName: string, fileSize: number) => {
+  const handleUpload = useCallback(async (file: File) => {
     setUploading(true);
     setUploadProgress(0);
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise((r) => setTimeout(r, 80));
-      setUploadProgress(i);
-    }
+    // Simulate progress while uploading
+    const progressInterval = setInterval(() => {
+      setUploadProgress((prev) => (prev < 85 ? prev + 5 : prev));
+    }, 200);
     try {
-      const newDoc = await vaultDocumentsService.create({ name: fileName, sizeBytes: fileSize });
+      const newDoc = await vaultDocumentsService.upload(file);
+      clearInterval(progressInterval);
+      setUploadProgress(100);
       if (newDoc) {
         setDocuments((prev) => [newDoc, ...prev]);
-        toast.success(`"${fileName}" uploaded to Vault`);
+        toast.success(`"${file.name}" uploaded to Vault`);
       }
-    } catch {
-      toast.error('Failed to upload document');
+    } catch (err: any) {
+      clearInterval(progressInterval);
+      toast.error(err.message || 'Failed to upload document');
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -97,19 +100,19 @@ export default function VaultContent() {
     e.preventDefault();
     setDragOver(false);
     const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) handleUpload(files[0].name, files[0].size);
+    if (files.length > 0) handleUpload(files[0]);
   }, [handleUpload]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
-    if (files.length > 0) handleUpload(files[0].name, files[0].size);
+    if (files.length > 0) handleUpload(files[0]);
   };
 
-  const deleteDocument = async (id: string, name: string) => {
+  const deleteDocument = async (id: string, name: string, storagePath: string | null) => {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
     setOpenMenuId(null);
     try {
-      await vaultDocumentsService.delete(id);
+      await vaultDocumentsService.delete(id, storagePath);
       toast.success(`"${name}" deleted from Vault`);
     } catch {
       toast.error('Failed to delete document');
@@ -122,6 +125,28 @@ export default function VaultContent() {
     toast.success(`"${name}" added to AI BRAIN context`, {
       action: { label: 'Open', onClick: () => window.location.href = '/ai-brain' },
     });
+  };
+
+  const downloadDocument = async (doc: VaultDocument) => {
+    setOpenMenuId(null);
+    if (!doc.storagePath) {
+      toast.error('No file stored — this document was added without a file upload');
+      return;
+    }
+    try {
+      const url = await vaultDocumentsService.getSignedUrl(doc.storagePath);
+      if (!url) { toast.error('Could not generate download link'); return; }
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = doc.name;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloading "${doc.name}"`);
+    } catch {
+      toast.error('Failed to download document');
+    }
   };
 
   const handleGenerateCV = (projects: Project[], jobText: string) => {
@@ -427,7 +452,7 @@ export default function VaultContent() {
                               Send to AI BRAIN
                             </button>
                             <button
-                              onClick={() => { toast.success('Download started'); setOpenMenuId(null); }}
+                              onClick={() => downloadDocument(doc)}
                               className="w-full flex items-center gap-2 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
                             >
                               <Download size={12} />
@@ -435,7 +460,7 @@ export default function VaultContent() {
                             </button>
                             <hr className="border-zinc-700 my-1" />
                             <button
-                              onClick={() => deleteDocument(doc.id, doc.name)}
+                              onClick={() => deleteDocument(doc.id, doc.name, doc.storagePath)}
                               className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-zinc-700 transition-colors"
                             >
                               <Trash2 size={12} />

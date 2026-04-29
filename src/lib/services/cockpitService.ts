@@ -32,6 +32,7 @@ export interface VaultDocument {
   usageCount: number;
   tags: string[];
   lastUsed: string;
+  storagePath: string | null;
 }
 
 export interface Task {
@@ -91,6 +92,17 @@ function formatNoteTime(dateStr: string): string {
   if (diffDays === 0) return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
   if (diffDays === 1) return 'Yesterday';
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function inferDocType(fileName: string): VaultDocument['type'] {
+  const lower = fileName.toLowerCase();
+  if (lower.includes('cv') || lower.includes('resume')) return 'CV';
+  if (lower.includes('cover') || lower.includes('letter')) return 'Cover Letter';
+  if (lower.includes('case') || lower.includes('study')) return 'Case Study';
+  if (lower.includes('contract') || lower.includes('agreement')) return 'Contract';
+  if (lower.includes('skill') || lower.includes('competenc')) return 'Skills';
+  if (lower.includes('template')) return 'Template';
+  return 'Portfolio';
 }
 
 function isSchemaError(error: any): boolean {
@@ -292,7 +304,77 @@ export const vaultDocumentsService = {
         usageCount: row.usage_count,
         tags: row.tags || [],
         lastUsed: row.last_used_at ? formatRelativeTime(row.last_used_at) : 'Never',
+        storagePath: row.storage_path ?? null,
       }));
+    } catch (error: any) {
+      console.log('Schema-related error:', error.message);
+      throw error;
+    }
+  },
+
+  async upload(file: File, type?: VaultDocument['type']): Promise<VaultDocument | null> {
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Not authenticated');
+
+    // Build a unique storage path: {userId}/{timestamp}-{filename}
+    const timestamp = Date.now();
+    const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storagePath = `${user.id}/${timestamp}-${safeFileName}`;
+
+    // 1. Upload file to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from('vault-documents')
+      .upload(storagePath, file, {
+        cacheControl: '3600',
+        upsert: false,
+        contentType: file.type,
+      });
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError.message);
+      throw new Error(uploadError.message);
+    }
+
+    // 2. Infer doc type from file name if not provided
+    const inferredType = type ?? inferDocType(file.name);
+
+    // 3. Persist metadata in vault_documents table
+    try {
+      const { data, error } = await supabase
+        .from('vault_documents')
+        .insert({
+          user_id: user.id,
+          name: file.name,
+          doc_type: inferredType,
+          size_bytes: file.size,
+          tags: ['new'],
+          usage_count: 0,
+          storage_path: storagePath,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        // Rollback storage upload on DB failure
+        await supabase.storage.from('vault-documents').remove([storagePath]);
+        if (isSchemaError(error)) { console.error('Schema error:', error.message); throw error; }
+        console.log('Data error:', error.message);
+        return null;
+      }
+
+      return {
+        id: data.id,
+        name: data.name,
+        type: data.doc_type as VaultDocument['type'],
+        size: formatBytes(data.size_bytes),
+        sizeBytes: data.size_bytes,
+        uploadedAt: formatUploadedAt(data.uploaded_at),
+        usageCount: data.usage_count,
+        tags: data.tags || [],
+        lastUsed: 'Never',
+        storagePath: data.storage_path ?? null,
+      };
     } catch (error: any) {
       console.log('Schema-related error:', error.message);
       throw error;
@@ -334,6 +416,7 @@ export const vaultDocumentsService = {
         usageCount: data.usage_count,
         tags: data.tags || [],
         lastUsed: 'Never',
+        storagePath: null,
       };
     } catch (error: any) {
       console.log('Schema-related error:', error.message);
@@ -341,11 +424,21 @@ export const vaultDocumentsService = {
     }
   },
 
-  async delete(id: string): Promise<void> {
+  async getSignedUrl(storagePath: string, expiresIn = 3600): Promise<string | null> {
+    const supabase = createClient();
+    const { data, error } = await supabase.storage
+      .from('vault-documents')
+      .createSignedUrl(storagePath, expiresIn);
+    if (error) { console.error('Signed URL error:', error.message); return null; }
+    return data.signedUrl;
+  },
+
+  async delete(id: string, storagePath?: string | null): Promise<void> {
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
+    // Delete DB record first
     const { error } = await supabase
       .from('vault_documents')
       .delete()
@@ -353,6 +446,11 @@ export const vaultDocumentsService = {
       .eq('user_id', user.id);
 
     if (error) { if (isSchemaError(error)) throw error; }
+
+    // Then remove from storage if a path exists
+    if (storagePath) {
+      await supabase.storage.from('vault-documents').remove([storagePath]);
+    }
   },
 };
 
@@ -404,8 +502,8 @@ export const tasksService = {
           text: task.text,
           priority: task.priority,
           task_status: 'todo',
-          due_date: task.dueDate || 'No date',
-          project: task.project || 'General',
+          due_date: task.dueDate ?? 'No date',
+          project: task.project ?? 'General',
         })
         .select()
         .single();
@@ -492,7 +590,7 @@ export const notesService = {
     }
   },
 
-  async create(): Promise<Note | null> {
+  async create(note: { title: string; content: string }): Promise<Note | null> {
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('Not authenticated');
@@ -502,8 +600,8 @@ export const notesService = {
         .from('notes')
         .insert({
           user_id: user.id,
-          title: 'Untitled Note',
-          content: '',
+          title: note.title,
+          content: note.content,
         })
         .select()
         .single();
@@ -518,7 +616,7 @@ export const notesService = {
         id: data.id,
         title: data.title,
         content: data.content,
-        updatedAt: 'Just now',
+        updatedAt: formatNoteTime(data.updated_at),
       };
     } catch (error: any) {
       console.log('Schema-related error:', error.message);
@@ -526,14 +624,14 @@ export const notesService = {
     }
   },
 
-  async update(id: string, title: string, content: string): Promise<void> {
+  async update(id: string, updates: { title?: string; content?: string }): Promise<void> {
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('Not authenticated');
 
     const { error } = await supabase
       .from('notes')
-      .update({ title, content })
+      .update({ ...updates, updated_at: new Date().toISOString() })
       .eq('id', id)
       .eq('user_id', user.id);
 
