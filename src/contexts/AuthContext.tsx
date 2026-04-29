@@ -24,22 +24,26 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     let mounted = true;
 
-    // Initial session check
-    supabase.auth.getUser().then(({ data: { user }, error }) => {
+    // Use getSession() instead of getUser() for the initial check.
+    // getSession() reads from local storage without acquiring a Web Lock,
+    // preventing the "Lock broken by another request with the 'steal' option"
+    // race condition that occurs when getUser() and onAuthStateChange both
+    // try to refresh the token simultaneously.
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
       if (!mounted) return;
       if (error) {
-        // Clear any stale session data on auth errors
         clearStaleAuthTokens();
         supabase.auth.signOut().catch(() => {});
         setUser(null);
         setSession(null);
       } else {
-        setUser(user ?? null);
+        setSession(session ?? null);
+        setUser(session?.user ?? null);
       }
       setLoading(false);
     });
 
-    // Listen for auth changes — registered once for the lifetime of the provider
+    // onAuthStateChange is the single source of truth for session updates
     const {
       data: { subscription }
     } = supabase.auth.onAuthStateChange((event, session) => {
