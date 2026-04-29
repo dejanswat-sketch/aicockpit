@@ -20,6 +20,10 @@ interface Project {
 const STACK_ICON_MAP: Record<string, React.ElementType> = {
   'Node.js': Code2,
   'Android Studio': Smartphone,
+  'Kotlin': Smartphone,
+  'Ktor': Server,
+  'PostgreSQL': Database,
+  'OpenAI': Zap,
   'Supabase': Database,
   'Stripe': CreditCard,
   'Hostinger': Server,
@@ -30,6 +34,10 @@ const STACK_ICON_MAP: Record<string, React.ElementType> = {
 const STACK_COLOR_MAP: Record<string, string> = {
   'Node.js': 'text-green-400 bg-green-400/10 border-green-400/20',
   'Android Studio': 'text-blue-400 bg-blue-400/10 border-blue-400/20',
+  'Kotlin': 'text-purple-400 bg-purple-400/10 border-purple-400/20',
+  'Ktor': 'text-orange-400 bg-orange-400/10 border-orange-400/20',
+  'PostgreSQL': 'text-sky-400 bg-sky-400/10 border-sky-400/20',
+  'OpenAI': 'text-teal-400 bg-teal-400/10 border-teal-400/20',
   'Supabase': 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
   'Stripe': 'text-violet-400 bg-violet-400/10 border-violet-400/20',
   'Hostinger': 'text-orange-400 bg-orange-400/10 border-orange-400/20',
@@ -53,6 +61,23 @@ const PORTFOLIO_PROJECTS: Project[] = [
     ],
     githubUrl: 'https://github.com/dejanswat-sketch/aicockpit',
     liveUrl: 'https://app.nomorequiet.com',
+  },
+  {
+    id: 'proj-006',
+    name: 'NoMoreQuiet — AI Journal Android App',
+    description: 'Situation: Users needed a private, AI-assisted journaling app with secure cloud sync. Task: Design and build a full-stack Android app from scratch with an intelligent backend. Action: Built a native Android app in Kotlin (Android Studio) with Room local DB (AppDatabase, JournalDao), a Ktor REST backend handling auth sessions and journal CRUD, PostgreSQL as the production database (managed via DBeaver), and OpenAI API integrated via BuildConfig for AI-powered journal analysis and mood insights. Result: Delivered a production-ready app with offline-first architecture, secure JWT sessions, and real-time AI feedback — demonstrating end-to-end mobile + backend ownership.',
+    stack: ['Kotlin', 'Android Studio', 'Ktor', 'PostgreSQL', 'OpenAI'],
+    stackIcons: ['Kotlin', 'Android Studio', 'Ktor', 'PostgreSQL', 'OpenAI'],
+    category: 'Mobile App',
+    highlights: [
+      'Native Android (Kotlin) with MVVM architecture and Room local database',
+      'Ktor backend with JWT session management and REST API endpoints',
+      'PostgreSQL production database managed via DBeaver',
+      'OpenAI API key in BuildConfig for AI-powered journal analysis',
+      'AppDatabase_Impl + JournalDao_Impl for offline-first data layer',
+      'Full-stack solo project: Android client + Kotlin/Ktor server + AI integration',
+    ],
+    githubUrl: 'https://github.com/dejanswat-sketch/nomorequiet',
   },
   {
     id: 'proj-002',
@@ -174,7 +199,7 @@ export default function PortfolioSection({ onGenerateCV, highlightedProjectIds =
 
       {/* Tech stack legend */}
       <div className="flex flex-wrap gap-2">
-        {['Node.js', 'Android Studio', 'Supabase', 'Stripe', 'Hostinger'].map((tech) => {
+        {['Node.js', 'Android Studio', 'Kotlin', 'Ktor', 'PostgreSQL', 'OpenAI', 'Supabase', 'Stripe', 'Hostinger'].map((tech) => {
           const colorClass = STACK_COLOR_MAP[tech] || 'text-zinc-400 bg-zinc-800 border-zinc-700';
           return (
             <span key={tech} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-medium border ${colorClass}`}>
