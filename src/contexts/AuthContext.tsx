@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { createClient, clearStaleAuthTokens } from '@/lib/supabase/client';
+import { createClient } from '@/lib/supabase/client';
 
 const AuthContext = createContext<any>({});
 
@@ -23,34 +23,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     let mounted = true;
 
-    // onAuthStateChange fires INITIAL_SESSION on mount — use it as the single
-    // source of truth. This avoids calling getSession() separately, which was
-    // causing two concurrent Web Lock acquisitions and the
-    // "Lock broken by another request with the 'steal' option" crash.
     const {
       data: { subscription }
-    } = supabase.auth.onAuthStateChange((event, session) => {
+    } = supabase.auth.onAuthStateChange((event, currentSession) => {
       if (!mounted) return;
 
-      if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED' && !session) {
+      if (event === 'SIGNED_OUT') {
         setSession(null);
         setUser(null);
         setLoading(false);
         return;
       }
 
-      // If the session has a refresh token error, clear storage and sign out
-      if (!session && event === 'INITIAL_SESSION') {
-        // No session on initial load — clear any stale tokens and stay on login
-        clearStaleAuthTokens();
-        setSession(null);
-        setUser(null);
+      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        setSession(currentSession ?? null);
+        setUser(currentSession?.user ?? null);
         setLoading(false);
         return;
       }
 
-      setSession(session ?? null);
-      setUser(session?.user ?? null);
+      // Fallback for any other events
+      setSession(currentSession ?? null);
+      setUser(currentSession?.user ?? null);
       setLoading(false);
     });
 

@@ -1,6 +1,8 @@
 import { createBrowserClient } from '@supabase/ssr';
 
-// Clear all stale Supabase auth tokens from storage
+// Clear all stale Supabase auth tokens from storage.
+// Call this ONLY when you have confirmed there is an auth error
+// (e.g. user explicitly signs out, or a hard reset is needed).
 export const clearStaleAuthTokens = () => {
   if (typeof document === 'undefined') return;
   // Clear cookies

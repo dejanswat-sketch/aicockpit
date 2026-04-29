@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import AppLogo from '@/components/ui/AppLogo';
 import { Mail, Lock, Eye, EyeOff, LogIn, AlertCircle, ShieldAlert } from 'lucide-react';
-import { createClient, clearStaleAuthTokens } from '@/lib/supabase/client';
+import { createClient } from '@/lib/supabase/client';
 
 function LoginContent() {
   const router = useRouter();
@@ -27,11 +27,6 @@ function LoginContent() {
   const [resetMessage, setResetMessage] = useState('');
 
   useEffect(() => {
-    // Proactively clear any stale/corrupt tokens on login page load
-    // This resolves "Invalid Refresh Token: Refresh Token Not Found" errors
-    // that prevent the lock from being acquired and block sign-in
-    clearStaleAuthTokens();
-
     // Check both searchParams and raw window.location.search for reliability
     const fromSearchParams = searchParams.get('admin') === 'true';
     const fromWindowSearch =
