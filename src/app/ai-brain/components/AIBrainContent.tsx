@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Brain, Send, Sparkles, FileText, Copy, RotateCcw, Loader2, Plus, CheckCircle2, Radio, Archive, MessageSquare, Zap, User, Key, X, Eye, EyeOff } from 'lucide-react';
+import { Brain, Send, Sparkles, FileText, Copy, RotateCcw, Loader2, CheckCircle2, Radio, Archive, MessageSquare, Zap, User, Key, X, Eye, EyeOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { useChat } from '@/lib/hooks/useChat';
+import { vaultDocumentsService, type VaultDocument } from '@/lib/services/cockpitService';
 
 interface Message {
   id: string;
@@ -17,6 +18,8 @@ interface VaultDoc {
   name: string;
   type: string;
   selected: boolean;
+  storagePath: string | null;
+  tags: string[];
 }
 
 interface ActiveListing {
@@ -26,14 +29,6 @@ interface ActiveListing {
   matchScore: number;
   skills: string[];
 }
-
-const VAULT_DOCS: VaultDoc[] = [
-  { id: 'doc-001', name: 'Marko_Novak_CV_2026.pdf', type: 'CV', selected: true },
-  { id: 'doc-002', name: 'Portfolio_Case_Studies.pdf', type: 'Portfolio', selected: true },
-  { id: 'doc-003', name: 'FinTech_Dashboard_Case.pdf', type: 'Case Study', selected: false },
-  { id: 'doc-004', name: 'React_Skills_Summary.pdf', type: 'Skills', selected: false },
-  { id: 'doc-005', name: 'Cover_Letter_Template.docx', type: 'Template', selected: false },
-];
 
 const ACTIVE_LISTING: ActiveListing = {
   id: 'job-001',
@@ -51,15 +46,12 @@ const QUICK_PROMPTS = [
   { id: 'qp-risks', label: 'Project Risks', prompt: 'What are the potential red flags or risks in this job listing I should be aware of?' },
 ];
 
-const WELCOME_MESSAGE: Message = {
-  id: 'msg-001',
-  role: 'assistant',
-  content: `**AI BRAIN activated.** I'm connected to Google Gemini and ready to analyze job listings against your profile.\n\nI've loaded the active listing: **"Senior React Developer for FinTech Dashboard Redesign"** (94% match score).\n\nI have access to your **CV** and **Portfolio Case Studies** from your Vault. Select additional documents above to include more context.\n\nWhat would you like me to analyze? Use the quick prompts below or ask me anything specific.`,
-  timestamp: '',
-};
-
 function buildSystemPrompt(selectedDocs: VaultDoc[], listing: ActiveListing): string {
-  const docList = selectedDocs.map((d) => `- ${d.name} (${d.type})`).join('\n');
+  const docList = selectedDocs.map((d) => {
+    const tagStr = d.tags.length > 0 ? ` [tags: ${d.tags.join(', ')}]` : '';
+    return `- ${d.name} (${d.type})${tagStr}`;
+  }).join('\n');
+
   return `You are AI BRAIN, an expert freelance career advisor and proposal strategist integrated into a freelancer's cockpit application.
 
 ## Active Job Listing
@@ -69,8 +61,8 @@ Match Score: ${listing.matchScore}/100
 Required Skills: ${listing.skills.join(', ')}
 
 ## Vault Documents in Context
-The following documents from the user's Vault are available as context:
-${docList || 'No documents selected.'}
+The following documents from the user's Vault are loaded as context for this analysis:
+${docList || 'No documents selected. Ask the user to select documents from the Vault panel.'}
 
 ## Candidate Contact Info
 - Primary contact: dejanwarrior@gmail.com (email only — no phone number)
@@ -111,20 +103,28 @@ function formatMessage(text: string) {
   });
 }
 
+function buildWelcomeMessage(docCount: number): Message {
+  return {
+    id: 'msg-001',
+    role: 'assistant',
+    content: `**AI BRAIN activated.** I'm connected to Google Gemini and ready to analyze job listings against your profile.\n\nI've loaded the active listing: **"Senior React Developer for FinTech Dashboard Redesign"** (94% match score).\n\n${docCount > 0 ? `I have access to **${docCount} document${docCount > 1 ? 's' : ''}** from your Vault. Toggle documents in the panel to include or exclude them from context.` : 'No Vault documents are loaded yet. Upload documents in the **Vault** section and select them here for richer analysis.'}\n\nWhat would you like me to analyze? Use the quick prompts below or ask me anything specific.`,
+    timestamp: '',
+  };
+}
+
 export default function AIBrainContent() {
-  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
+  const [vaultDocs, setVaultDocs] = useState<VaultDoc[]>([]);
+  const [vaultLoading, setVaultLoading] = useState(true);
+  const [vaultError, setVaultError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [vaultDocs, setVaultDocs] = useState(VAULT_DOCS);
-  const [showVaultPicker, setShowVaultPicker] = useState(false);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingKey, setSavingKey] = useState(false);
-  // Track conversation history for multi-turn (excluding welcome message)
   const [conversationHistory, setConversationHistory] = useState<Array<{ role: string; content: string }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Track if we've already added the streaming response to messages
   const streamingMsgIdRef = useRef<string | null>(null);
 
   const { response, isLoading, error, sendMessage: sendGeminiMessage, abort } = useChat(
@@ -133,17 +133,47 @@ export default function AIBrainContent() {
     true
   );
 
+  // Load vault documents from Supabase
+  const loadVaultDocs = useCallback(async () => {
+    try {
+      setVaultLoading(true);
+      setVaultError(null);
+      const data = await vaultDocumentsService.getAll();
+      setVaultDocs(
+        data.map((doc, idx) => ({
+          id: doc.id,
+          name: doc.name,
+          type: doc.type,
+          // Auto-select first 2 docs (CV and Portfolio types preferred)
+          selected: idx < 2 || doc.type === 'CV' || doc.type === 'Portfolio',
+          storagePath: doc.storagePath,
+          tags: doc.tags,
+        }))
+      );
+    } catch (err: any) {
+      setVaultError(err.message || 'Failed to load vault documents');
+    } finally {
+      setVaultLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadVaultDocs();
+  }, [loadVaultDocs]);
+
+  // Set welcome message once vault docs are loaded
+  useEffect(() => {
+    if (!vaultLoading) {
+      const selectedCount = vaultDocs.filter((d) => d.selected).length;
+      const welcome = buildWelcomeMessage(selectedCount);
+      const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+      setMessages([{ ...welcome, timestamp: ts }]);
+    }
+  }, [vaultLoading]);
+
   useEffect(() => {
     if (error) toast.error(error.message);
   }, [error]);
-
-  // Set welcome message timestamp on client only to avoid hydration mismatch
-  useEffect(() => {
-    const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-    setMessages((prev) =>
-      prev.map((m) => (m.id === 'msg-001' && m.timestamp === '' ? { ...m, timestamp: ts } : m))
-    );
-  }, []);
 
   // Handle streaming response — update the assistant message in real-time
   useEffect(() => {
@@ -161,7 +191,6 @@ export default function AIBrainContent() {
   useEffect(() => {
     if (!isLoading && streamingMsgIdRef.current && response) {
       const finalContent = response;
-      const msgId = streamingMsgIdRef.current;
       streamingMsgIdRef.current = null;
       setConversationHistory((prev) => [
         ...prev,
@@ -189,7 +218,6 @@ export default function AIBrainContent() {
       timestamp,
     };
 
-    // Placeholder assistant message for streaming
     const assistantMsgId = `msg-ai-${Date.now()}`;
     const assistantMsg: Message = {
       id: assistantMsgId,
@@ -202,11 +230,9 @@ export default function AIBrainContent() {
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setInput('');
 
-    // Update conversation history with the new user message
     const updatedHistory = [...conversationHistory, { role: 'user', content: messageText }];
     setConversationHistory(updatedHistory);
 
-    // Build messages array for Gemini: system + full conversation history
     const systemPrompt = buildSystemPrompt(selectedDocs, ACTIVE_LISTING);
     const apiMessages = [
       { role: 'system', content: systemPrompt },
@@ -229,7 +255,10 @@ export default function AIBrainContent() {
   };
 
   const clearChat = () => {
-    setMessages([WELCOME_MESSAGE]);
+    const selectedCount = vaultDocs.filter((d) => d.selected).length;
+    const welcome = buildWelcomeMessage(selectedCount);
+    const ts = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    setMessages([{ ...welcome, timestamp: ts }]);
     setConversationHistory([]);
     streamingMsgIdRef.current = null;
     toast.success('Chat cleared');
@@ -237,6 +266,15 @@ export default function AIBrainContent() {
 
   const toggleDoc = (id: string) => {
     setVaultDocs((prev) => prev.map((d) => (d.id === id ? { ...d, selected: !d.selected } : d)));
+  };
+
+  const selectAllDocs = () => {
+    setVaultDocs((prev) => prev.map((d) => ({ ...d, selected: true })));
+    toast.success('All documents added to context');
+  };
+
+  const clearAllDocs = () => {
+    setVaultDocs((prev) => prev.map((d) => ({ ...d, selected: false })));
   };
 
   const saveApiKey = async () => {
@@ -392,41 +430,102 @@ export default function AIBrainContent() {
         <div className="px-4 py-3 flex-1 overflow-y-auto">
           <div className="flex items-center justify-between mb-2">
             <p className="text-[10px] font-medium text-zinc-600 uppercase tracking-widest">Vault Context</p>
-            <button
-              onClick={() => setShowVaultPicker(!showVaultPicker)}
-              className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-0.5 transition-colors"
-            >
-              <Plus size={10} />
-              Add
-            </button>
+            <div className="flex items-center gap-1.5">
+              {vaultDocs.length > 0 && (
+                <>
+                  <button
+                    onClick={selectAllDocs}
+                    title="Select all documents"
+                    className="text-[10px] text-zinc-600 hover:text-teal-400 transition-colors"
+                  >
+                    All
+                  </button>
+                  <span className="text-zinc-700 text-[10px]">·</span>
+                  <button
+                    onClick={clearAllDocs}
+                    title="Deselect all documents"
+                    className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+                  >
+                    None
+                  </button>
+                  <span className="text-zinc-700 text-[10px]">·</span>
+                </>
+              )}
+              <button
+                onClick={loadVaultDocs}
+                title="Refresh vault documents"
+                className="text-zinc-600 hover:text-teal-400 transition-colors"
+              >
+                <RefreshCw size={10} />
+              </button>
+            </div>
           </div>
 
-          <div className="space-y-1.5">
-            {vaultDocs.map((doc) => (
-              <div
-                key={doc.id}
-                onClick={() => toggleDoc(doc.id)}
-                className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-all duration-150 border ${
-                  doc.selected
-                    ? 'bg-teal-400/8 border-teal-400/20 text-teal-400' :'bg-zinc-800/30 border-zinc-800 text-zinc-600 hover:border-zinc-700'
-                }`}
+          {/* Vault loading state */}
+          {vaultLoading && (
+            <div className="flex items-center gap-2 py-4 justify-center">
+              <Loader2 size={12} className="text-teal-400 animate-spin" />
+              <span className="text-[10px] text-zinc-600">Loading vault...</span>
+            </div>
+          )}
+
+          {/* Vault error state */}
+          {!vaultLoading && vaultError && (
+            <div className="flex flex-col items-center gap-2 py-4">
+              <AlertCircle size={14} className="text-red-400" />
+              <p className="text-[10px] text-zinc-600 text-center">{vaultError}</p>
+              <button
+                onClick={loadVaultDocs}
+                className="text-[10px] text-teal-400 hover:text-teal-300 transition-colors"
               >
-                {doc.selected ? (
-                  <CheckCircle2 size={12} className="text-teal-400 flex-shrink-0" />
-                ) : (
-                  <FileText size={12} className="flex-shrink-0" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-medium truncate">{doc.name}</p>
-                  <p className="text-[9px] text-zinc-600">{doc.type}</p>
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* Empty vault state */}
+          {!vaultLoading && !vaultError && vaultDocs.length === 0 && (
+            <div className="flex flex-col items-center gap-2 py-4">
+              <FileText size={14} className="text-zinc-700" />
+              <p className="text-[10px] text-zinc-600 text-center leading-relaxed">
+                No documents in Vault.<br />
+                <a href="/vault" className="text-teal-400 hover:text-teal-300">Upload files</a> to use as context.
+              </p>
+            </div>
+          )}
+
+          {/* Document list */}
+          {!vaultLoading && !vaultError && vaultDocs.length > 0 && (
+            <div className="space-y-1.5">
+              {vaultDocs.map((doc) => (
+                <div
+                  key={doc.id}
+                  onClick={() => toggleDoc(doc.id)}
+                  className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-all duration-150 border ${
+                    doc.selected
+                      ? 'bg-teal-400/8 border-teal-400/20 text-teal-400' :'bg-zinc-800/30 border-zinc-800 text-zinc-600 hover:border-zinc-700'
+                  }`}
+                >
+                  {doc.selected ? (
+                    <CheckCircle2 size={12} className="text-teal-400 flex-shrink-0" />
+                  ) : (
+                    <FileText size={12} className="flex-shrink-0" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-medium truncate">{doc.name}</p>
+                    <p className="text-[9px] text-zinc-600">{doc.type}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           <div className="mt-3 pt-3 border-t border-zinc-800">
             <p className="text-[10px] text-zinc-600">
-              <span className="font-mono text-teal-400">{selectedDocs.length}</span> documents in context
+              <span className="font-mono text-teal-400">{selectedDocs.length}</span>
+              {' '}of{' '}
+              <span className="font-mono text-zinc-500">{vaultDocs.length}</span>
+              {' '}documents in context
             </p>
           </div>
         </div>
@@ -459,9 +558,17 @@ export default function AIBrainContent() {
               Gemini 2.5 Flash
             </span>
           </div>
-          <div className="flex items-center gap-2 text-xs text-zinc-600">
-            <Archive size={12} />
-            <span>Session auto-saved</span>
+          <div className="flex items-center gap-3">
+            {selectedDocs.length > 0 && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-teal-400/8 border border-teal-400/15 rounded-lg">
+                <FileText size={10} className="text-teal-400" />
+                <span className="text-[10px] font-mono text-teal-400">{selectedDocs.length} doc{selectedDocs.length > 1 ? 's' : ''} loaded</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2 text-xs text-zinc-600">
+              <Archive size={12} />
+              <span>Session auto-saved</span>
+            </div>
           </div>
         </div>
 
