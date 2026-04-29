@@ -25,6 +25,43 @@ interface AuthContextValue {
   getUserProfile: () => Promise<unknown>;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Force-logout: wipe all storage and redirect to /login.
+ * Called when a refresh_token_not_found error is detected to break
+ * the rate-limit loop caused by repeated failed token refresh attempts.
+ */
+const forceLogout = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+    // Wipe sb-* and auth-token cookies
+    document.cookie.split(';').forEach((c) => {
+      const name = c.trim().split('=')[0];
+      if (name.startsWith('sb-') || name.includes('auth-token')) {
+        document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+      }
+    });
+  } catch {
+    // storage may be unavailable
+  }
+  window.location.href = '/login';
+};
+
+/** Returns true if the error message indicates a stale/invalid refresh token. */
+const isRefreshTokenError = (message?: string): boolean => {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('refresh_token_not_found') ||
+    lower.includes('invalid refresh token') ||
+    lower.includes('token has expired') ||
+    lower.includes('refresh token not found')
+  );
+};
+
 // ─── Context ──────────────────────────────────────────────────────────────────
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -51,38 +88,88 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     let mounted = true;
 
-    // onAuthStateChange fires INITIAL_SESSION synchronously on mount,
-    // so no separate getSession() call is needed (avoids dual Web Lock acquisition).
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, currentSession) => {
+    // Small debounce: give the browser a tick before Supabase attempts
+    // automatic session refresh on load, reducing race conditions with
+    // Web Locks and preventing immediate rate-limit hits.
+    const initTimer = setTimeout(() => {
       if (!mounted) return;
 
-      switch (event) {
-        case 'INITIAL_SESSION': case'SIGNED_IN': case'TOKEN_REFRESHED': case'USER_UPDATED':
-          setSession(currentSession);
-          setUser(currentSession?.user ?? null);
-          setLoading(false);
-          break;
+      // onAuthStateChange fires INITIAL_SESSION synchronously on mount,
+      // so no separate getSession() call is needed (avoids dual Web Lock acquisition).
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((event, currentSession) => {
+        if (!mounted) return;
 
-        case 'SIGNED_OUT':
-          setSession(null);
-          setUser(null);
-          setLoading(false);
-          // Wipe any leftover sb-* / lock:* entries after sign-out
-          clearStaleAuthTokens();
-          break;
+        switch (event) {
+          case 'INITIAL_SESSION': case'SIGNED_IN': case'TOKEN_REFRESHED': case'USER_UPDATED':
+            setSession(currentSession);
+            setUser(currentSession?.user ?? null);
+            setLoading(false);
+            break;
 
-        default:
-          setSession(currentSession);
-          setUser(currentSession?.user ?? null);
-          setLoading(false);
-      }
-    });
+          case 'SIGNED_OUT':
+            setSession(null);
+            setUser(null);
+            setLoading(false);
+            // Wipe any leftover sb-* / lock:* entries after sign-out
+            clearStaleAuthTokens();
+            break;
+
+          default:
+            setSession(currentSession);
+            setUser(currentSession?.user ?? null);
+            setLoading(false);
+        }
+      });
+
+      // Intercept token refresh errors at the fetch level to catch
+      // refresh_token_not_found responses that Supabase may not surface
+      // as auth state change events.
+      const originalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await originalFetch(...args);
+        // Clone to read body without consuming the original stream
+        if (!response.ok) {
+          try {
+            const clone = response.clone();
+            const text = await clone.text();
+            if (isRefreshTokenError(text)) {
+              forceLogout();
+            }
+          } catch {
+            // ignore body-read errors
+          }
+        }
+        return response;
+      };
+
+      // Listen for Supabase auth errors emitted on the client
+      supabase.auth.onAuthStateChange((event, _session) => {
+        if (event === 'SIGNED_OUT') {
+          // Already handled above; no-op here
+        }
+      });
+
+      // Cleanup
+      const cleanup = () => {
+        mounted = false;
+        subscription.unsubscribe();
+        // Restore original fetch
+        window.fetch = originalFetch;
+      };
+
+      // Store cleanup on the timer ref so the outer cleanup can call it
+      (initTimer as any)._cleanup = cleanup;
+    }, 100); // 100 ms debounce before first session refresh attempt
 
     return () => {
       mounted = false;
-      subscription.unsubscribe();
+      clearTimeout(initTimer);
+      // Call inner cleanup if it was registered
+      if ((initTimer as any)._cleanup) {
+        (initTimer as any)._cleanup();
+      }
     };
     // supabase is a stable ref — intentionally omitted from deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -106,7 +193,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
-    if (error) throw error;
+    if (error) {
+      if (isRefreshTokenError(error.message)) forceLogout();
+      throw error;
+    }
     return data;
   };
 
@@ -115,7 +205,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       email,
       password,
     });
-    if (error) throw error;
+    if (error) {
+      if (isRefreshTokenError(error.message)) forceLogout();
+      throw error;
+    }
     return data;
   };
 
@@ -129,7 +222,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       data: { user: currentUser },
       error,
     } = await supabase.auth.getUser();
-    if (error) throw error;
+    if (error) {
+      if (isRefreshTokenError(error.message)) forceLogout();
+      throw error;
+    }
     return currentUser;
   };
 
