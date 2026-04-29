@@ -14,6 +14,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import type { Project } from './PortfolioSection';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface CVGeneratorModalProps {
   isOpen: boolean;
@@ -620,6 +621,7 @@ export default function CVGeneratorModal({
   selectedProjects,
   jobText,
 }: CVGeneratorModalProps) {
+  const { user } = useAuth();
   const [generating, setGenerating] = useState(false);
   const [generatedCV, setGeneratedCV] = useState<GeneratedCV | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -660,6 +662,45 @@ export default function CVGeneratorModal({
     try {
       await downloadCVAsPDF(generatedCV);
       toast.success('PDF downloaded successfully!');
+
+      // Trigger Resend email via Supabase Edge Function
+      if (user?.id) {
+        try {
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+          // Extract job title and company from jobText if available
+          const jobTitle = generatedCV.title || 'Software Architect & Full-Stack Developer';
+          const company = jobText
+            ? jobText.split('\n')[0]?.slice(0, 80) || 'Prospective Client'
+            : 'Prospective Client';
+          const cvName = `CV_${(generatedCV.name || 'Dejan').replace(/\s+/g, '_')}_Master.pdf`;
+
+          await fetch(
+            `${supabaseUrl}/functions/v1/send-submission-email`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${supabaseAnonKey}`,
+              },
+              body: JSON.stringify({
+                record: {
+                  user_id: user.id,
+                  job_title: jobTitle,
+                  company: company,
+                  cv_name: cvName,
+                  job_url: '',
+                  notes: selectedProjects.map((p) => p.name).join(', '),
+                  submitted_at: new Date().toISOString(),
+                },
+              }),
+            }
+          );
+        } catch {
+          // Email trigger is non-blocking — silently ignore failures
+        }
+      }
     } catch (err: any) {
       toast.error('PDF generation failed. Try copying the text instead.');
     } finally {
