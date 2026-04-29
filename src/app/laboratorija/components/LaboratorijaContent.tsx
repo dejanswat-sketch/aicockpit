@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { FileText, CheckSquare, Upload, Plus, Trash2, Check, Circle, AlertTriangle, ArrowUp, ArrowDown, Minus, File, X, Clock, Bold, Italic, List, Hash, Loader2, FolderOpen, AlertCircle } from 'lucide-react';
 
 import { tasksService, notesService, type Task, type Note } from '@/lib/services/cockpitService';
+import { useAuth } from '@/contexts/AuthContext';
 
 // ── Types ──────────────────────────────────────────────────────────────
 type TaskPriority = 'critical' | 'high' | 'medium' | 'low';
@@ -33,6 +34,7 @@ const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string; bg: 
 };
 
 export default function LaboratorijaContent() {
+  const { user } = useAuth();
   // Notes state
   const [notes, setNotes] = useState<Note[]>([]);
   const [activeNote, setActiveNote] = useState<Note | null>(null);
@@ -161,6 +163,31 @@ export default function LaboratorijaContent() {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status: next } : t)));
     try {
       await tasksService.updateStatus(id, next);
+
+      // Fire Project Update email when task is marked done
+      if (next === 'done' && user?.id) {
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+        fetch(`${supabaseUrl}/functions/v1/send-submission-email`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${supabaseAnonKey}`,
+          },
+          body: JSON.stringify({
+            type: 'project_update',
+            record: {
+              user_id: user.id,
+              task_text: task.text,
+              priority: task.priority,
+              project: task.project || 'Lab',
+              completed_at: new Date().toISOString(),
+            },
+          }),
+        }).catch(() => {
+          // Non-blocking — silently ignore email failures
+        });
+      }
     } catch {
       setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status: task.status } : t)));
       toast.error('Failed to update task');

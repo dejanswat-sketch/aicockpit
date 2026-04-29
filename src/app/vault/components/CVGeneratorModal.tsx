@@ -12,6 +12,7 @@ import {
   Sparkles,
   Copy,
   AlertCircle,
+  Send,
 } from 'lucide-react';
 import type { Project } from './PortfolioSection';
 import { useAuth } from '@/contexts/AuthContext';
@@ -627,6 +628,8 @@ export default function CVGeneratorModal({
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'preview' | 'raw'>('preview');
   const [downloadingPDF, setDownloadingPDF] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   const generateCV = useCallback(async () => {
     if (selectedProjects.length === 0) return;
@@ -705,6 +708,48 @@ export default function CVGeneratorModal({
       toast.error('PDF generation failed. Try copying the text instead.');
     } finally {
       setDownloadingPDF(false);
+    }
+  };
+
+  const handleSubmitCV = async () => {
+    if (!generatedCV || !user?.id) return;
+    setSubmitting(true);
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      const jobTitle = generatedCV.title || 'Software Architect & Full-Stack Developer';
+      const company = jobText
+        ? jobText.split('\n')[0]?.slice(0, 80) || 'Prospective Client'
+        : 'Prospective Client';
+      const cvName = `CV_${(generatedCV.name || 'Dejan').replace(/\s+/g, '_')}_Master.pdf`;
+
+      await fetch(`${supabaseUrl}/functions/v1/send-submission-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${supabaseAnonKey}`,
+        },
+        body: JSON.stringify({
+          type: 'cv_submission',
+          record: {
+            user_id: user.id,
+            job_title: jobTitle,
+            company: company,
+            cv_name: cvName,
+            job_url: '',
+            notes: selectedProjects.map((p) => p.name).join(', '),
+            submitted_at: new Date().toISOString(),
+          },
+        }),
+      });
+
+      setSubmitted(true);
+      toast.success('CV submitted — confirmation email sent!');
+    } catch {
+      toast.error('Submission failed. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -989,7 +1034,7 @@ export default function CVGeneratorModal({
               <button
                 onClick={handleDownloadPDF}
                 disabled={downloadingPDF}
-                className="flex items-center gap-1.5 px-3 py-2 bg-teal-400/10 border border-teal-400/30 text-teal-400 rounded-lg text-xs font-medium hover:bg-teal-400/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 px-3 py-2 bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg text-xs font-medium hover:border-zinc-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {downloadingPDF ? (
                   <>
@@ -1000,6 +1045,31 @@ export default function CVGeneratorModal({
                   <>
                     <FileDown size={12} />
                     Download PDF
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleSubmitCV}
+                disabled={submitting || submitted}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all disabled:cursor-not-allowed ${
+                  submitted
+                    ? 'bg-emerald-400/10 border border-emerald-400/30 text-emerald-400 opacity-70' :'bg-teal-400/10 border border-teal-400/30 text-teal-400 hover:bg-teal-400/20 disabled:opacity-50'
+                }`}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 size={12} className="animate-spin" />
+                    Submitting...
+                  </>
+                ) : submitted ? (
+                  <>
+                    <CheckCircle2 size={12} />
+                    Submitted
+                  </>
+                ) : (
+                  <>
+                    <Send size={12} />
+                    Submit
                   </>
                 )}
               </button>

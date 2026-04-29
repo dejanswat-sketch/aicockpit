@@ -16,8 +16,9 @@ serve(async (req) => {
   try {
     const payload = await req?.json();
 
-    // Supabase DB webhook sends { type, table, record, old_record }
+    // Support both DB webhook format { record } and direct call format { type, record }
     const record = payload?.record;
+    const emailType = payload?.type || "cv_submission";
 
     if (!record) {
       return new Response(JSON.stringify({ error: "No record in payload" }), {
@@ -28,11 +29,15 @@ serve(async (req) => {
 
     // Fetch the user's email from user_profiles
     const supabaseAdmin = createClient(
-      (typeof Deno !== "undefined" ? Deno?.env?.get("SUPABASE_URL") : undefined) ?? "",
-      (typeof Deno !== "undefined" ? Deno?.env?.get("SUPABASE_SERVICE_ROLE_KEY") : undefined) ?? ""
+      (typeof Deno !== "undefined" ? (Deno as any)?.env?.get("SUPABASE_URL") : undefined) ?? "",
+      (typeof Deno !== "undefined" ? (Deno as any)?.env?.get("SUPABASE_SERVICE_ROLE_KEY") : undefined) ?? ""
     );
 
-    const { data: profile, error: profileError } = await supabaseAdmin?.from("user_profiles")?.select("email, full_name")?.eq("id", record?.user_id)?.single();
+    const { data: profile, error: profileError } = await supabaseAdmin
+      ?.from("user_profiles")
+      ?.select("email, full_name")
+      ?.eq("id", record?.user_id)
+      ?.single();
 
     if (profileError || !profile?.email) {
       console.error("Could not fetch user profile:", profileError?.message);
@@ -42,22 +47,130 @@ serve(async (req) => {
       });
     }
 
-    const resendApiKey = (typeof Deno !== "undefined" ? Deno?.env?.get("RESEND_API_KEY") : undefined) ?? "";
+    const resendApiKey = (typeof Deno !== "undefined" ? (Deno as any)?.env?.get("RESEND_API_KEY") : undefined) ?? "";
     const recipientName = profile?.full_name || "there";
-    const jobTitle = record?.job_title || "the position";
-    const company = record?.company || "the company";
-    const cvName = record?.cv_name || "your CV";
-    const jobUrl = record?.job_url || "";
-    const notes = record?.notes || "";
-    const submittedAt = new Date(record.submitted_at)?.toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
 
-    const emailHtml = `
+    let emailHtml = "";
+    let subject = "";
+
+    // ── PROJECT UPDATE email (Lab task completed) ──────────────────────────
+    if (emailType === "project_update") {
+      const taskText = record?.task_text || "A task";
+      const taskPriority = record?.priority || "medium";
+      const projectName = record?.project || "Lab";
+      const completedAt = new Date(record?.completed_at || new Date().toISOString()).toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      const priorityColor: Record<string, string> = {
+        critical: "#f87171",
+        high: "#fbbf24",
+        medium: "#60a5fa",
+        low: "#71717a",
+      };
+      const pColor = priorityColor[taskPriority] || "#60a5fa";
+
+      subject = `✅ Task Completed — ${taskText.slice(0, 60)}`;
+
+      emailHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project Update</title>
+</head>
+<body style="margin:0;padding:0;background:#09090b;font-family:'Segoe UI',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#09090b;padding:40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="560" cellpadding="0" cellspacing="0" style="background:#18181b;border:1px solid #27272a;border-radius:12px;overflow:hidden;">
+          <!-- Header -->
+          <tr>
+            <td style="background:#1c1c1e;border-bottom:2px solid #0d9488;padding:24px 32px;">
+              <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:3px;color:#ccfbf1;text-transform:uppercase;">AICockpit · Laboratory</p>
+              <h1 style="margin:8px 0 0;font-size:22px;font-weight:700;color:#ffffff;">Project Update</h1>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:32px;">
+              <p style="margin:0 0 20px;font-size:15px;color:#a1a1aa;">Hey ${recipientName},</p>
+              <p style="margin:0 0 24px;font-size:15px;color:#d4d4d8;line-height:1.6;">
+                A task has been marked as <strong style="color:#34d399;">completed</strong> in your Laboratory.
+              </p>
+
+              <!-- Task Details -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background:#09090b;border:1px solid #27272a;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+                <tr>
+                  <td style="padding:16px 20px;border-bottom:1px solid #27272a;">
+                    <p style="margin:0;font-size:10px;font-weight:600;letter-spacing:2px;color:#71717a;text-transform:uppercase;">Task</p>
+                    <p style="margin:4px 0 0;font-size:15px;font-weight:600;color:#f4f4f5;">${taskText}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:16px 20px;border-bottom:1px solid #27272a;">
+                    <p style="margin:0;font-size:10px;font-weight:600;letter-spacing:2px;color:#71717a;text-transform:uppercase;">Priority</p>
+                    <p style="margin:4px 0 0;font-size:14px;font-weight:600;color:${pColor};">${taskPriority.charAt(0).toUpperCase() + taskPriority.slice(1)}</p>
+                  </td>
+                </tr>
+                ${projectName ? `
+                <tr>
+                  <td style="padding:16px 20px;border-bottom:1px solid #27272a;">
+                    <p style="margin:0;font-size:10px;font-weight:600;letter-spacing:2px;color:#71717a;text-transform:uppercase;">Project</p>
+                    <p style="margin:4px 0 0;font-size:14px;color:#a1a1aa;">${projectName}</p>
+                  </td>
+                </tr>` : ""}
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <p style="margin:0;font-size:10px;font-weight:600;letter-spacing:2px;color:#71717a;text-transform:uppercase;">Completed At</p>
+                    <p style="margin:4px 0 0;font-size:14px;color:#a1a1aa;">${completedAt}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:0;font-size:14px;color:#71717a;line-height:1.6;">
+                Keep up the momentum — view all your tasks in the 
+                <a href="https://app.nomorequiet.com/laboratorija" style="color:#2dd4bf;text-decoration:none;">Laboratory</a>.
+              </p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px 32px;border-top:1px solid #27272a;">
+              <p style="margin:0;font-size:12px;color:#52525b;text-align:center;">
+                AICockpit · <a href="https://app.nomorequiet.com" style="color:#52525b;">app.nomorequiet.com</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+    } else {
+      // ── CV SUBMISSION email (original flow) ─────────────────────────────
+      const jobTitle = record?.job_title || "the position";
+      const company = record?.company || "the company";
+      const cvName = record?.cv_name || "your CV";
+      const jobUrl = record?.job_url || "";
+      const notes = record?.notes || "";
+      const submittedAt = new Date(record.submitted_at || new Date().toISOString()).toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      subject = `CV Submitted to ${company} — ${jobTitle}`;
+
+      emailHtml = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -146,6 +259,7 @@ serve(async (req) => {
   </table>
 </body>
 </html>`;
+    }
 
     const resendResponse = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -156,7 +270,7 @@ serve(async (req) => {
       body: JSON.stringify({
         from: "onboarding@resend.dev",
         to: [profile?.email],
-        subject: `CV Submitted to ${company} — ${jobTitle}`,
+        subject,
         html: emailHtml,
       }),
     });
