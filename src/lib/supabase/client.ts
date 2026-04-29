@@ -10,10 +10,10 @@ export const clearStaleAuthTokens = () => {
       document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
     }
   });
-  // Clear localStorage
+  // Clear localStorage (tokens + any orphaned lock entries)
   try {
     Object.keys(localStorage)
-      .filter((k) => k.startsWith('sb-') || k.includes('supabase'))
+      .filter((k) => k.startsWith('sb-') || k.includes('supabase') || k.startsWith('lock:'))
       .forEach((k) => localStorage.removeItem(k));
   } catch {}
 };

@@ -17,44 +17,40 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<any>(null);
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  // Use ref so the same client instance is used for the lifetime of the provider
   const supabaseRef = useRef(createClient());
   const supabase = supabaseRef.current;
 
   useEffect(() => {
     let mounted = true;
 
-    // Use getSession() instead of getUser() for the initial check.
-    // getSession() reads from local storage without acquiring a Web Lock,
-    // preventing the "Lock broken by another request with the 'steal' option"
-    // race condition that occurs when getUser() and onAuthStateChange both
-    // try to refresh the token simultaneously.
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (!mounted) return;
-      if (error) {
-        clearStaleAuthTokens();
-        supabase.auth.signOut().catch(() => {});
-        setUser(null);
-        setSession(null);
-      } else {
-        setSession(session ?? null);
-        setUser(session?.user ?? null);
-      }
-      setLoading(false);
-    });
-
-    // onAuthStateChange is the single source of truth for session updates
+    // onAuthStateChange fires INITIAL_SESSION on mount — use it as the single
+    // source of truth. This avoids calling getSession() separately, which was
+    // causing two concurrent Web Lock acquisitions and the
+    // "Lock broken by another request with the 'steal' option" crash.
     const {
       data: { subscription }
     } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
-      if (event === 'SIGNED_OUT') {
+
+      if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED' && !session) {
         setSession(null);
         setUser(null);
-      } else {
-        setSession(session);
-        setUser(session?.user ?? null);
+        setLoading(false);
+        return;
       }
+
+      // If the session has a refresh token error, clear storage and sign out
+      if (!session && event === 'INITIAL_SESSION') {
+        // No session on initial load — clear any stale tokens and stay on login
+        clearStaleAuthTokens();
+        setSession(null);
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      setSession(session ?? null);
+      setUser(session?.user ?? null);
       setLoading(false);
     });
 
@@ -63,7 +59,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       subscription.unsubscribe();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // empty deps — run once on mount only
+  }, []);
 
   // Email/Password Sign Up
   const signUp = async (email: string, password: string, metadata = {}) => {
