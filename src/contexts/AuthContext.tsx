@@ -108,6 +108,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             setLoading(false);
             break;
 
+          case 'TOKEN_REFRESH_FAILED':
+            // Supabase fires this when the refresh token is invalid/not found.
+            // Immediately wipe storage and redirect to break the retry loop.
+            forceLogout();
+            break;
+
           case 'SIGNED_OUT':
             setSession(null);
             setUser(null);
