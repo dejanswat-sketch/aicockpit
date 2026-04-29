@@ -30,6 +30,15 @@ interface STAREntry {
   result: string;
   techStack: string[];
   links: { label: string; url: string }[];
+  visualEvidence?: { filename: string; caption: string; url: string }[];
+}
+
+interface WorkExperience {
+  company: string;
+  role: string;
+  period: string;
+  description: string;
+  highlights?: string[];
 }
 
 interface GeneratedCV {
@@ -41,6 +50,7 @@ interface GeneratedCV {
   projectLinks: { label: string; url: string }[];
   summary: string;
   starEntries: STAREntry[];
+  workExperience?: WorkExperience[];
   skills: string[];
   rawText: string;
 }
@@ -49,37 +59,116 @@ const GITHUB_URL = 'https://github.com/dejanswat-sketch';
 const CONTACT_EMAIL = 'dejanwarrior@gmail.com';
 const LINKEDIN_URL = 'https://linkedin.com/in/dejan';
 
+// Visual portfolio mapping: project name → screenshot info
+const VISUAL_PORTFOLIO: Record<string, { filename: string; caption: string; url: string }[]> = {
+  'AICockpit': [
+    {
+      filename: 'image_a65e54.png',
+      caption: 'VAULT section with pre-loaded projects and CV Generator',
+      url: 'https://aicockpit5745.builtwithrocket.new',
+    },
+    {
+      filename: 'image_a6521a.png',
+      caption: 'Dynamic CV Generator modal with 3 selected projects',
+      url: 'https://aicockpit5745.builtwithrocket.new',
+    },
+  ],
+  'NoMoreQuiet': [
+    {
+      filename: 'image_a580db.png',
+      caption: 'Main screen — "The place where silence finally finds its voice"',
+      url: 'https://app.nomorequiet.com',
+    },
+    {
+      filename: 'image_a57574.png',
+      caption: 'PostgreSQL database structure in DBeaver',
+      url: 'https://app.nomorequiet.com',
+    },
+  ],
+  'NezadovoljneZene': [
+    {
+      filename: 'image_a57c5f.jpg',
+      caption: '"Digitalna Ludnica" UI with AI agent Valerijan',
+      url: 'https://nezadovoljnezene.com',
+    },
+  ],
+  'AI Rental Platform': [
+    {
+      filename: 'image_a578b9.jpg',
+      caption: 'Landing page with AI-powered smart property search',
+      url: '#',
+    },
+  ],
+  'Wealth Terminal': [
+    {
+      filename: 'image_a5783e.png',
+      caption: 'Financial dashboard with $28M portfolio overview',
+      url: '#',
+    },
+  ],
+  'Backend Ktor/Kotlin': [
+    {
+      filename: 'image_a57953.png',
+      caption: 'IntelliJ IDE — travel-backend with JWT session management',
+      url: 'https://github.com/dejanswat-sketch',
+    },
+  ],
+};
+
+function getPortfolioForProject(projectName: string): { filename: string; caption: string; url: string }[] {
+  const key = Object.keys(VISUAL_PORTFOLIO).find((k) =>
+    projectName.toLowerCase().includes(k.toLowerCase()) ||
+    k.toLowerCase().includes(projectName.toLowerCase().split(' ')[0])
+  );
+  return key ? VISUAL_PORTFOLIO[key] : [];
+}
+
 function buildCVPrompt(projects: Project[], jobText: string): string {
   const projectList = projects
-    .map(
-      (p, i) =>
-        `Project ${i + 1}: ${p.name}
+    .map((p, i) => {
+      const portfolio = getPortfolioForProject(p.name);
+      const portfolioStr = portfolio.length
+        ? `Visual Evidence:\n${portfolio.map((v) => `  - ${v.filename}: ${v.caption} → ${v.url}`).join('\n')}`
+        : '';
+      return `Project ${i + 1}: ${p.name}
 Category: ${p.category}
 Stack: ${p.stack.join(', ')}
 Description: ${p.description}
 Highlights: ${p.highlights.join('; ')}
 ${p.githubUrl ? `GitHub: ${p.githubUrl}` : ''}
-${p.liveUrl ? `Live: ${p.liveUrl}` : ''}`
-    )
+${p.liveUrl ? `Live: ${p.liveUrl}` : ''}
+${portfolioStr}`;
+    })
     .join('\n\n');
 
-  return `You are an expert CV writer specializing in ATS-friendly technical CVs. Generate a professional CV section for a freelance software architect.
+  return `You are an expert CV writer specializing in ATS-friendly technical CVs. Generate a COMPLETE MASTER CV for a senior freelance software architect.
 
 ## Candidate Profile
 - Name: Dejan (Software Architect & Full-Stack Developer)
-- Email: ${CONTACT_EMAIL} (primary contact — no phone number)
+- Email: ${CONTACT_EMAIL} (PRIMARY contact — no phone number, ever)
 - GitHub: ${GITHUB_URL}
 - LinkedIn: ${LINKEDIN_URL} (optional)
-- Specialization: Node.js, Android Studio, Supabase, Stripe integrations, Hostinger deployment
-- Contact Note: Client contact is exclusively via email
+- Specialization: Node.js, Next.js, Android Studio, Supabase, Stripe, Kotlin/Ktor, AI integrations, Hostinger deployment
+- Contact Note: Client contact is EXCLUSIVELY via email: ${CONTACT_EMAIL}
 
-## Selected Projects
+## Selected Projects (with Visual Evidence)
 ${projectList}
+
+## Previous Work Experience (MANDATORY — include in CV)
+1. Direkcija za mere i dragocene metale (Bureau of Measures and Precious Metals)
+   - Role: Technical specialist working on high-precision measurement systems
+   - Relevance: Guarantees engineering precision and pedantic code quality
+   - Key skill: Attention to detail, standards compliance, systematic approach
+
+2. Zastupništvo Goodman Airconditioning & PDQ Manufacturing
+   - Role: Technical representative managing global brand partnerships
+   - Relevance: Experience collaborating with global industry leaders, managing technical representations
+   - Key skill: International B2B communication, technical documentation, project coordination
 
 ${jobText ? `## Target Job Description\n${jobText}\n` : ''}
 
 ## Instructions
-Generate a JSON response with this exact structure:
+Generate a JSON response with this EXACT structure — this is a MASTER CV, include ALL sections:
 {
   "name": "Dejan",
   "title": "Software Architect & Full-Stack Developer",
@@ -87,29 +176,47 @@ Generate a JSON response with this exact structure:
   "github": "${GITHUB_URL}",
   "linkedin": "${LINKEDIN_URL}",
   "projectLinks": [{"label": "project name", "url": "url"}],
-  "summary": "2-3 sentence ATS-optimized professional summary mentioning key technologies",
+  "summary": "3-4 sentence ATS-optimized professional summary combining technical expertise with precision background",
   "starEntries": [
     {
       "projectName": "exact project name",
       "situation": "1-2 sentences: business context and challenge",
       "task": "1-2 sentences: your specific responsibility as architect",
-      "action": "2-3 sentences: technical decisions and implementation details with specific technologies",
-      "result": "1-2 sentences: measurable outcomes and efficiency gains",
+      "action": "2-3 sentences: technical decisions and implementation with specific technologies",
+      "result": "1-2 sentences: measurable outcomes (e.g. 80% automation, reduced time by X%)",
       "techStack": ["tech1", "tech2"],
-      "links": [{"label": "GitHub", "url": "url"}]
+      "links": [{"label": "Live", "url": "url"}, {"label": "GitHub", "url": "url"}],
+      "visualEvidence": [{"filename": "image_xxx.png", "caption": "description", "url": "link"}]
     }
   ],
-  "skills": ["skill1", "skill2", "...up to 12 key technical skills"],
-  "rawText": "Complete ATS-friendly plain text CV ready for copy-paste"
+  "workExperience": [
+    {
+      "company": "Direkcija za mere i dragocene metale",
+      "role": "Technical Specialist — High-Precision Measurement Systems",
+      "period": "Prior to freelance",
+      "description": "Worked on certified high-precision measurement systems, developing systematic and pedantic approach to engineering that directly translates to clean, reliable code architecture.",
+      "highlights": ["High-precision systems", "Standards compliance", "Engineering discipline"]
+    },
+    {
+      "company": "Zastupništvo Goodman Airconditioning & PDQ Manufacturing",
+      "role": "Technical Representative — Global Brand Partnerships",
+      "period": "Prior to freelance",
+      "description": "Managed technical representations for global industry leaders Goodman Airconditioning and PDQ Manufacturing, coordinating international B2B relationships and technical documentation.",
+      "highlights": ["Global B2B partnerships", "Technical documentation", "International coordination"]
+    }
+  ],
+  "skills": ["Next.js", "Node.js", "TypeScript", "Kotlin/Ktor", "Android Studio", "Supabase", "PostgreSQL", "Stripe", "AI/LLM Integration", "REST APIs", "JWT Auth", "Hostinger Deployment"],
+  "rawText": "Complete ATS-friendly plain text master CV ready for copy-paste — MUST include all sections: header, summary, featured projects with STAR, visual portfolio references, work experience, skills"
 }
 
-IMPORTANT: 
-- Use STAR method strictly for each project
-- rawText must be clean plain text, no markdown, no special characters
-- DO NOT include any phone number anywhere in the CV — contact is email only
-- rawText header must include: email (${CONTACT_EMAIL}), GitHub, LinkedIn, and project links
-- Emphasize architect role and efficiency/performance results
-- Include specific metrics where possible (e.g., "reduced load time by 40%")`;
+CRITICAL RULES:
+- NEVER include phone number anywhere — email ONLY: ${CONTACT_EMAIL}
+- rawText must be clean plain text, no markdown symbols, no special characters
+- Include ALL work experience entries in rawText
+- Include visual portfolio references in rawText as: "[Visual: filename — caption — url]"
+- Emphasize 80% automation result for AICockpit
+- Include specific metrics for every project result
+- rawText must be a complete, standalone document ready to send to a client`;
 }
 
 async function callGeminiWithRetry(
@@ -183,37 +290,69 @@ function downloadTextAsPDF(cv: GeneratedCV) {
 function buildFallbackText(cv: GeneratedCV): string {
   const contactParts = [
     `Email: ${cv.email || CONTACT_EMAIL}`,
-    `GitHub: ${cv.github}`,
+    `GitHub: ${cv.github || GITHUB_URL}`,
   ];
   if (cv.linkedin) contactParts.push(`LinkedIn: ${cv.linkedin}`);
   const links = [
     ...contactParts,
-    ...cv.projectLinks.map((l) => `${l.label}: ${l.url}`),
+    ...(cv.projectLinks || []).map((l) => `${l.label}: ${l.url}`),
   ].join(' | ');
 
-  const projects = cv.starEntries
-    .map(
-      (e) =>
-        `${e.projectName} [${e.techStack.join(', ')}]
+  const projects = (cv.starEntries || [])
+    .map((e) => {
+      const portfolio = getPortfolioForProject(e.projectName);
+      const visualStr = portfolio.length
+        ? `\nVisual Evidence:\n${portfolio.map((v) => `  [Visual: ${v.filename} — ${v.caption} — ${v.url}]`).join('\n')}`
+        : '';
+      return `${e.projectName} [${(e.techStack || []).join(', ')}]
 Situation: ${e.situation}
 Task: ${e.task}
 Action: ${e.action}
-Result: ${e.result}`
+Result: ${e.result}${visualStr}`;
+    })
+    .join('\n\n');
+
+  const workExp = ((cv as any).workExperience || [
+    {
+      company: 'Direkcija za mere i dragocene metale',
+      role: 'Technical Specialist — High-Precision Measurement Systems',
+      period: 'Prior to freelance',
+      description: 'Worked on certified high-precision measurement systems, developing systematic and pedantic approach to engineering that directly translates to clean, reliable code architecture.',
+    },
+    {
+      company: 'Zastupništvo Goodman Airconditioning & PDQ Manufacturing',
+      role: 'Technical Representative — Global Brand Partnerships',
+      period: 'Prior to freelance',
+      description: 'Managed technical representations for global industry leaders, coordinating international B2B relationships and technical documentation.',
+    },
+  ])
+    .map(
+      (w: any) =>
+        `${w.company}
+${w.role} | ${w.period}
+${w.description}`
     )
     .join('\n\n');
 
-  return `${cv.name}
-${cv.title}
+  return `${cv.name || 'Dejan'}
+${cv.title || 'Software Architect & Full-Stack Developer'}
 ${links}
 
 PROFESSIONAL SUMMARY
-${cv.summary}
+${cv.summary || ''}
 
 TECHNICAL SKILLS
-${cv.skills.join(', ')}
+${(cv.skills || []).join(', ')}
 
-SELECTED PROJECTS
-${projects}`;
+FEATURED PROJECTS (STAR Method)
+${projects}
+
+PREVIOUS WORK EXPERIENCE
+${workExp}
+
+CONTACT
+Email: ${CONTACT_EMAIL} (primary — no phone)
+GitHub: ${GITHUB_URL}`;
 }
 
 export default function CVGeneratorModal({
@@ -429,10 +568,63 @@ export default function CVGeneratorModal({
                               </div>
                             ))}
                           </div>
+                          {/* Visual Evidence per project */}
+                          {(() => {
+                            const portfolio = entry.visualEvidence?.length
+                              ? entry.visualEvidence
+                              : getPortfolioForProject(entry.projectName);
+                            return portfolio.length > 0 ? (
+                              <div className="mt-2 pt-2 border-t border-zinc-700/40">
+                                <p className="text-[9px] text-zinc-600 uppercase tracking-wider mb-1.5">Visual Evidence</p>
+                                <div className="flex flex-col gap-1">
+                                  {portfolio.map((v, vi) => (
+                                    <a
+                                      key={vi}
+                                      href={v.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="flex items-center gap-2 text-[10px] text-teal-400/80 hover:text-teal-400 transition-colors"
+                                    >
+                                      <ExternalLink size={9} className="flex-shrink-0" />
+                                      <span className="font-mono text-zinc-500">{v.filename}</span>
+                                      <span className="text-zinc-600">—</span>
+                                      <span className="text-zinc-400 truncate">{v.caption}</span>
+                                    </a>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null;
+                          })()}
                         </div>
                       ))}
                     </div>
                   </div>
+
+                  {/* Work Experience */}
+                  {(generatedCV.workExperience && generatedCV.workExperience.length > 0) && (
+                    <div>
+                      <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-2">Previous Work Experience</p>
+                      <div className="flex flex-col gap-3">
+                        {generatedCV.workExperience.map((w, i) => (
+                          <div key={i} className="p-3 bg-zinc-800/30 border border-zinc-700/40 rounded-xl">
+                            <div className="flex items-start justify-between gap-2 mb-1">
+                              <h4 className="text-xs font-600 text-zinc-200">{w.company}</h4>
+                              <span className="text-[9px] text-zinc-600 whitespace-nowrap">{w.period}</span>
+                            </div>
+                            <p className="text-[10px] text-teal-400/70 mb-1">{w.role}</p>
+                            <p className="text-[10px] text-zinc-500 leading-relaxed">{w.description}</p>
+                            {w.highlights && w.highlights.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                {w.highlights.map((h) => (
+                                  <span key={h} className="text-[9px] text-zinc-600 bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-700/50">{h}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Skills */}
                   {generatedCV.skills?.length > 0 && (
