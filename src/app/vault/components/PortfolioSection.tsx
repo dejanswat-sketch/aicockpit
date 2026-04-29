@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { toast } from 'sonner';
-import { Code2, Smartphone, Database, CreditCard, Server, ExternalLink, Github as GithubIcon, Star, Zap, FileDown, ChevronDown, ChevronUp, Globe } from 'lucide-react';
+import { Code2, Smartphone, Database, CreditCard, Server, ExternalLink, GitBranch as GithubIcon, Star, Zap, FileDown, ChevronDown, ChevronUp, Globe } from 'lucide-react';
 
 interface Project {
   id: string;

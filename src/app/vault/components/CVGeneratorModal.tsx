@@ -6,7 +6,7 @@ import {
   X,
   FileDown,
   Loader2,
-  Github as GithubIcon,
+  GitBranch as GithubIcon,
   ExternalLink,
   CheckCircle2,
   Sparkles,
