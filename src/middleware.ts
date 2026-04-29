@@ -17,7 +17,7 @@ function injectTokenFromHeader(request: NextRequest): void {
 const ALLOWED_EMAILS = ['dejanwarrior@gmail.com', 'dejanswat@gmail.com'];
 const PROTECTED_ROUTES = ['/radar', '/ai-brain', '/vault', '/laboratorija', '/submissions'];
 const AUTH_ROUTES = ['/login', '/register'];
-const PUBLIC_ROUTES = ['/access-denied'];
+const PUBLIC_ROUTES = ['/access-denied', '/auth/callback', '/update-password'];
 
 export async function middleware(request: NextRequest) {
   injectTokenFromHeader(request);
