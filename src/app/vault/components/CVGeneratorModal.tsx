@@ -276,17 +276,274 @@ function parseGeminiResponse(raw: string): GeneratedCV | null {
   }
 }
 
-function downloadTextAsPDF(cv: GeneratedCV) {
-  const content = cv.rawText || buildFallbackText(cv);
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `CV_${cv.name.replace(/\s+/g, '_')}_ATS.txt`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+async function downloadCVAsPDF(cv: GeneratedCV) {
+  const { jsPDF } = await import('jspdf');
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const marginL = 18;
+  const marginR = 18;
+  const contentW = pageW - marginL - marginR;
+  let y = 20;
+
+  const checkPage = (needed: number) => {
+    if (y + needed > pageH - 15) {
+      doc.addPage();
+      y = 20;
+    }
+  };
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  const addText = (
+    text: string,
+    x: number,
+    fontSize: number,
+    color: [number, number, number],
+    style: 'normal' | 'bold' = 'normal',
+    maxWidth?: number
+  ) => {
+    doc.setFontSize(fontSize);
+    doc.setTextColor(...color);
+    doc.setFont('helvetica', style);
+    if (maxWidth) {
+      const lines = doc.splitTextToSize(text, maxWidth);
+      doc.text(lines, x, y);
+      return lines.length;
+    }
+    doc.text(text, x, y);
+    return 1;
+  };
+
+  const sectionHeader = (title: string) => {
+    checkPage(12);
+    y += 4;
+    doc.setFillColor(20, 184, 166); // teal-500
+    doc.rect(marginL, y - 3.5, contentW, 0.5, 'F');
+    addText(title.toUpperCase(), marginL, 8, [20, 184, 166], 'bold');
+    y += 6;
+  };
+
+  // ── NAME & TITLE ─────────────────────────────────────────────────────────
+  addText(cv.name || 'Dejan', marginL, 22, [15, 23, 42], 'bold');
+  y += 8;
+  addText(cv.title || 'Software Architect & Full-Stack Developer', marginL, 11, [71, 85, 105], 'normal');
+  y += 6;
+
+  // ── CONTACT LINE ─────────────────────────────────────────────────────────
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  doc.setFont('helvetica', 'normal');
+  const contactParts = [
+    `✉ ${cv.email || CONTACT_EMAIL}`,
+    `⌥ ${cv.github || GITHUB_URL}`,
+    ...(cv.linkedin ? [`in ${cv.linkedin}`] : []),
+  ];
+  doc.text(contactParts.join('   |   '), marginL, y);
+  y += 8;
+
+  // divider
+  doc.setDrawColor(226, 232, 240);
+  doc.setLineWidth(0.3);
+  doc.line(marginL, y, pageW - marginR, y);
+  y += 6;
+
+  // ── SUMMARY ──────────────────────────────────────────────────────────────
+  if (cv.summary) {
+    sectionHeader('Professional Summary');
+    doc.setFontSize(9);
+    doc.setTextColor(51, 65, 85);
+    doc.setFont('helvetica', 'normal');
+    const summaryLines = doc.splitTextToSize(cv.summary, contentW);
+    checkPage(summaryLines.length * 5 + 4);
+    doc.text(summaryLines, marginL, y);
+    y += summaryLines.length * 5 + 4;
+  }
+
+  // ── SKILLS ───────────────────────────────────────────────────────────────
+  if (cv.skills?.length) {
+    sectionHeader('Technical Skills');
+    const skillText = cv.skills.join('  ·  ');
+    doc.setFontSize(9);
+    doc.setTextColor(51, 65, 85);
+    doc.setFont('helvetica', 'normal');
+    const skillLines = doc.splitTextToSize(skillText, contentW);
+    checkPage(skillLines.length * 5 + 4);
+    doc.text(skillLines, marginL, y);
+    y += skillLines.length * 5 + 4;
+  }
+
+  // ── STAR ENTRIES ─────────────────────────────────────────────────────────
+  if (cv.starEntries?.length) {
+    sectionHeader('Featured Projects — STAR Method');
+
+    for (const entry of cv.starEntries) {
+      checkPage(40);
+
+      // Project name + stack
+      doc.setFontSize(10);
+      doc.setTextColor(15, 118, 110); // teal-700
+      doc.setFont('helvetica', 'bold');
+      doc.text(entry.projectName, marginL, y);
+
+      const stackStr = (entry.techStack || []).slice(0, 5).join(', ');
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139);
+      doc.setFont('helvetica', 'normal');
+      const stackW = doc.getTextWidth(stackStr);
+      doc.text(stackStr, pageW - marginR - stackW, y);
+      y += 5;
+
+      // STAR rows
+      const starRows: { label: string; content: string }[] = [
+        { label: 'S', content: entry.situation },
+        { label: 'T', content: entry.task },
+        { label: 'A', content: entry.action },
+        { label: 'R', content: entry.result },
+      ];
+
+      for (const row of starRows) {
+        const lines = doc.splitTextToSize(row.content || '', contentW - 10);
+        checkPage(lines.length * 4.5 + 3);
+
+        // Label badge
+        doc.setFillColor(204, 251, 241); // teal-100
+        doc.roundedRect(marginL, y - 3, 5, 4.5, 0.8, 0.8, 'F');
+        doc.setFontSize(7.5);
+        doc.setTextColor(15, 118, 110);
+        doc.setFont('helvetica', 'bold');
+        doc.text(row.label, marginL + 1.2, y);
+
+        // Content
+        doc.setFontSize(8.5);
+        doc.setTextColor(51, 65, 85);
+        doc.setFont('helvetica', 'normal');
+        doc.text(lines, marginL + 8, y);
+        y += lines.length * 4.5 + 2;
+      }
+
+      // Visual evidence
+      const portfolio = entry.visualEvidence?.length
+        ? entry.visualEvidence
+        : getPortfolioForProject(entry.projectName);
+
+      if (portfolio.length) {
+        checkPage(portfolio.length * 5 + 5);
+        doc.setFontSize(7.5);
+        doc.setTextColor(100, 116, 139);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Visual Evidence:', marginL + 8, y);
+        y += 4;
+        for (const v of portfolio) {
+          checkPage(5);
+          doc.setFontSize(7.5);
+          doc.setTextColor(15, 118, 110);
+          doc.setFont('helvetica', 'normal');
+          const evidenceLine = `${v.filename}  —  ${v.caption}  →  ${v.url}`;
+          const evLines = doc.splitTextToSize(evidenceLine, contentW - 12);
+          doc.text(evLines, marginL + 10, y);
+          y += evLines.length * 4 + 1;
+        }
+      }
+
+      // Project links
+      if (entry.links?.length) {
+        checkPage(6);
+        const linkStr = entry.links.map((l) => `${l.label}: ${l.url}`).join('   ');
+        doc.setFontSize(7.5);
+        doc.setTextColor(100, 116, 139);
+        doc.setFont('helvetica', 'normal');
+        const lLines = doc.splitTextToSize(linkStr, contentW - 8);
+        doc.text(lLines, marginL + 8, y);
+        y += lLines.length * 4 + 1;
+      }
+
+      y += 5;
+      // thin separator
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.2);
+      doc.line(marginL, y - 2, pageW - marginR, y - 2);
+    }
+  }
+
+  // ── WORK EXPERIENCE ──────────────────────────────────────────────────────
+  const workExp = cv.workExperience?.length
+    ? cv.workExperience
+    : [
+        {
+          company: 'Direkcija za mere i dragocene metale',
+          role: 'Technical Specialist — High-Precision Measurement Systems',
+          period: 'Prior to freelance',
+          description:
+            'Worked on certified high-precision measurement systems, developing a systematic and pedantic approach to engineering that directly translates to clean, reliable code architecture.',
+          highlights: ['High-precision systems', 'Standards compliance', 'Engineering discipline'],
+        },
+        {
+          company: 'Zastupništvo Goodman Airconditioning & PDQ Manufacturing',
+          role: 'Technical Representative — Global Brand Partnerships',
+          period: 'Prior to freelance',
+          description:
+            'Managed technical representations for global industry leaders, coordinating international B2B relationships and technical documentation.',
+          highlights: ['Global B2B partnerships', 'Technical documentation', 'International coordination'],
+        },
+      ];
+
+  if (workExp.length) {
+    sectionHeader('Previous Work Experience');
+    for (const w of workExp) {
+      checkPage(28);
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.text(w.company, marginL, y);
+
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139);
+      doc.setFont('helvetica', 'normal');
+      const periodW = doc.getTextWidth(w.period);
+      doc.text(w.period, pageW - marginR - periodW, y);
+      y += 5;
+
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 118, 110);
+      doc.setFont('helvetica', 'bold');
+      doc.text(w.role, marginL, y);
+      y += 5;
+
+      doc.setFontSize(8.5);
+      doc.setTextColor(71, 85, 105);
+      doc.setFont('helvetica', 'normal');
+      const descLines = doc.splitTextToSize(w.description, contentW);
+      checkPage(descLines.length * 4.5 + 3);
+      doc.text(descLines, marginL, y);
+      y += descLines.length * 4.5 + 3;
+
+      if (w.highlights?.length) {
+        checkPage(6);
+        doc.setFontSize(7.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text(w.highlights.join('  ·  '), marginL, y);
+        y += 5;
+      }
+      y += 3;
+    }
+  }
+
+  // ── FOOTER ───────────────────────────────────────────────────────────────
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      `${cv.name || 'Dejan'} — ${cv.title || 'Software Architect'}  |  ${cv.email || CONTACT_EMAIL}  |  Page ${i} of ${totalPages}`,
+      marginL,
+      pageH - 8
+    );
+  }
+
+  doc.save(`CV_${(cv.name || 'Dejan').replace(/\s+/g, '_')}_Master.pdf`);
 }
 
 function buildFallbackText(cv: GeneratedCV): string {
@@ -367,6 +624,7 @@ export default function CVGeneratorModal({
   const [generatedCV, setGeneratedCV] = useState<GeneratedCV | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'preview' | 'raw'>('preview');
+  const [downloadingPDF, setDownloadingPDF] = useState(false);
 
   const generateCV = useCallback(async () => {
     if (selectedProjects.length === 0) return;
@@ -394,6 +652,19 @@ export default function CVGeneratorModal({
     const text = generatedCV.rawText || buildFallbackText(generatedCV);
     navigator.clipboard.writeText(text);
     toast.success('CV text copied to clipboard');
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!generatedCV) return;
+    setDownloadingPDF(true);
+    try {
+      await downloadCVAsPDF(generatedCV);
+      toast.success('PDF downloaded successfully!');
+    } catch (err: any) {
+      toast.error('PDF generation failed. Try copying the text instead.');
+    } finally {
+      setDownloadingPDF(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -675,11 +946,21 @@ export default function CVGeneratorModal({
                 Copy Text
               </button>
               <button
-                onClick={() => downloadTextAsPDF(generatedCV)}
-                className="flex items-center gap-1.5 px-3 py-2 bg-teal-400/10 border border-teal-400/30 text-teal-400 rounded-lg text-xs font-medium hover:bg-teal-400/20 transition-all"
+                onClick={handleDownloadPDF}
+                disabled={downloadingPDF}
+                className="flex items-center gap-1.5 px-3 py-2 bg-teal-400/10 border border-teal-400/30 text-teal-400 rounded-lg text-xs font-medium hover:bg-teal-400/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <FileDown size={12} />
-                Download ATS CV
+                {downloadingPDF ? (
+                  <>
+                    <Loader2 size={12} className="animate-spin" />
+                    Generating PDF...
+                  </>
+                ) : (
+                  <>
+                    <FileDown size={12} />
+                    Download PDF
+                  </>
+                )}
               </button>
             </div>
           </div>
