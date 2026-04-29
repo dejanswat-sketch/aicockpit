@@ -1,11 +1,35 @@
 'use client';
 
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import type { Session, User } from '@supabase/supabase-js';
+import { createClient, clearStaleAuthTokens } from '@/lib/supabase/client';
 
-const AuthContext = createContext<any>({});
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-export const useAuth = () => {
+interface AuthContextValue {
+  user: User | null;
+  session: Session | null;
+  loading: boolean;
+  signUp: (email: string, password: string, metadata?: Record<string, unknown>) => Promise<unknown>;
+  signIn: (email: string, password: string) => Promise<unknown>;
+  signOut: () => Promise<void>;
+  getCurrentUser: () => Promise<User | null>;
+  isEmailVerified: () => boolean;
+  getUserProfile: () => Promise<unknown>;
+}
+
+// ─── Context ──────────────────────────────────────────────────────────────────
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+export const useAuth = (): AuthContextValue => {
   const context = useContext(AuthContext);
   if (!context) {
     throw new Error('useAuth must be used within AuthProvider');
@@ -13,94 +37,106 @@ export const useAuth = () => {
   return context;
 };
 
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<any>(null);
-  const [session, setSession] = useState<any>(null);
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Stable client reference — never recreated during component lifetime
   const supabaseRef = useRef(createClient());
   const supabase = supabaseRef.current;
 
   useEffect(() => {
     let mounted = true;
 
+    // onAuthStateChange fires INITIAL_SESSION synchronously on mount,
+    // so no separate getSession() call is needed (avoids dual Web Lock acquisition).
     const {
-      data: { subscription }
+      data: { subscription },
     } = supabase.auth.onAuthStateChange((event, currentSession) => {
       if (!mounted) return;
 
-      if (event === 'SIGNED_OUT') {
-        setSession(null);
-        setUser(null);
-        setLoading(false);
-        return;
-      }
+      switch (event) {
+        case 'INITIAL_SESSION': case'SIGNED_IN': case'TOKEN_REFRESHED': case'USER_UPDATED':
+          setSession(currentSession);
+          setUser(currentSession?.user ?? null);
+          setLoading(false);
+          break;
 
-      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        setSession(currentSession ?? null);
-        setUser(currentSession?.user ?? null);
-        setLoading(false);
-        return;
-      }
+        case 'SIGNED_OUT':
+          setSession(null);
+          setUser(null);
+          setLoading(false);
+          // Wipe any leftover sb-* / lock:* entries after sign-out
+          clearStaleAuthTokens();
+          break;
 
-      // Fallback for any other events
-      setSession(currentSession ?? null);
-      setUser(currentSession?.user ?? null);
-      setLoading(false);
+        default:
+          setSession(currentSession);
+          setUser(currentSession?.user ?? null);
+          setLoading(false);
+      }
     });
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // supabase is a stable ref — intentionally omitted from deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Email/Password Sign Up
-  const signUp = async (email: string, password: string, metadata = {}) => {
+  // ── Auth methods ────────────────────────────────────────────────────────────
+
+  const signUp = async (
+    email: string,
+    password: string,
+    metadata: Record<string, unknown> = {}
+  ) => {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: {
-          full_name: (metadata as any)?.fullName || '',
-          avatar_url: (metadata as any)?.avatarUrl || ''
+          full_name: (metadata.fullName as string) ?? '',
+          avatar_url: (metadata.avatarUrl as string) ?? '',
         },
-        emailRedirectTo: `${window.location.origin}/auth/callback`
-      }
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
     });
     if (error) throw error;
     return data;
   };
 
-  // Email/Password Sign In
   const signIn = async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
-      password
+      password,
     });
     if (error) throw error;
     return data;
   };
 
-  // Sign Out
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   };
 
-  // Get Current User
-  const getCurrentUser = async () => {
-    const { data: { user }, error } = await supabase.auth.getUser();
+  const getCurrentUser = async (): Promise<User | null> => {
+    const {
+      data: { user: currentUser },
+      error,
+    } = await supabase.auth.getUser();
     if (error) throw error;
-    return user;
+    return currentUser;
   };
 
-  // Check if Email is Verified
-  const isEmailVerified = () => {
-    return user?.email_confirmed_at !== null;
+  const isEmailVerified = (): boolean => {
+    return user?.email_confirmed_at != null;
   };
 
-  // Get User Profile from Database
   const getUserProfile = async () => {
     if (!user) return null;
     const { data, error } = await supabase
@@ -112,7 +148,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return data;
   };
 
-  const value = {
+  // ── Context value ───────────────────────────────────────────────────────────
+
+  const value: AuthContextValue = {
     user,
     session,
     loading,
@@ -121,7 +159,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     signOut,
     getCurrentUser,
     isEmailVerified,
-    getUserProfile
+    getUserProfile,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

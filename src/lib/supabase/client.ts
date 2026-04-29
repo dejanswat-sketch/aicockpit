@@ -1,33 +1,50 @@
 import { createBrowserClient } from '@supabase/ssr';
 
-// Clear all stale Supabase auth tokens from storage.
-// Call this ONLY when you have confirmed there is an auth error
-// (e.g. user explicitly signs out, or a hard reset is needed).
+/**
+ * Clears all Supabase auth tokens and orphaned lock entries from localStorage and cookies.
+ * Safe to call at any time — removes only sb-* and lock:* keys.
+ */
 export const clearStaleAuthTokens = () => {
-  if (typeof document === 'undefined') return;
+  if (typeof window === 'undefined') return;
+
   // Clear cookies
   document.cookie.split(';').forEach((c) => {
     const name = c.trim().split('=')[0];
-    if (name.includes('auth-token') || name.startsWith('sb-')) {
+    if (name.startsWith('sb-') || name.includes('auth-token')) {
       document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
     }
   });
-  // Clear localStorage (tokens + any orphaned lock entries)
+
+  // Clear localStorage: all sb-* keys and all lock:* keys
   try {
-    Object.keys(localStorage)
-      .filter((k) => k.startsWith('sb-') || k.includes('supabase') || k.startsWith('lock:'))
-      .forEach((k) => localStorage.removeItem(k));
-  } catch {}
+    const keysToRemove = Object.keys(localStorage).filter(
+      (k) => k.startsWith('sb-') || k.startsWith('lock:')
+    );
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // localStorage may be unavailable in some environments
+  }
 };
 
-// Singleton client — prevents multiple instances from conflicting over cookies/tokens
+// Singleton client — one instance per browser session
 let clientInstance: ReturnType<typeof createBrowserClient> | null = null;
 
 export function createClient() {
   if (clientInstance) return clientInstance;
+
   clientInstance = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
+
   return clientInstance;
+}
+
+/**
+ * Destroys the singleton and wipes all auth storage.
+ * Use this for a full hard reset when lock errors occur.
+ */
+export function resetClient() {
+  clientInstance = null;
+  clearStaleAuthTokens();
 }
