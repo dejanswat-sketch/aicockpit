@@ -102,10 +102,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         if (!mounted) return;
 
         switch (event) {
-          case 'INITIAL_SESSION': case'SIGNED_IN': case'TOKEN_REFRESHED': case'USER_UPDATED':
+          case 'INITIAL_SESSION': case'TOKEN_REFRESHED': case'USER_UPDATED':
             setSession(currentSession);
             setUser(currentSession?.user ?? null);
             setLoading(false);
+            break;
+
+          case 'SIGNED_IN':
+            // Use setTimeout(0) to defer state update after the auth flow completes,
+            // preventing duplicate requests caused by React re-renders mid-auth.
+            setTimeout(() => {
+              if (!mounted) return;
+              setSession(currentSession);
+              setUser(currentSession?.user ?? null);
+              setLoading(false);
+            }, 0);
             break;
 
           case 'TOKEN_REFRESH_FAILED':
