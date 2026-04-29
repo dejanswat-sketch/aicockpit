@@ -41,9 +41,36 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  let user = null;
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+      const msg = error.message?.toLowerCase() ?? '';
+      const isStaleToken =
+        msg.includes('refresh_token_not_found') ||
+        msg.includes('invalid refresh token') ||
+        msg.includes('token has expired') ||
+        error.status === 400;
+
+      if (isStaleToken) {
+        // Wipe all auth cookies and redirect to /login to break the loop
+        const url = request.nextUrl.clone();
+        url.pathname = '/login';
+        const response = NextResponse.redirect(url);
+        request.cookies.getAll().forEach((c) => {
+          if (c.name.startsWith('sb-') || c.name.includes('auth-token')) {
+            response.cookies.set(c.name, '', { maxAge: 0, path: '/' });
+          }
+        });
+        return response;
+      }
+    } else {
+      user = data.user;
+    }
+  } catch {
+    // Network or unexpected error — treat as unauthenticated
+    user = null;
+  }
 
   // Redirect unauthenticated users away from protected routes
   if (!user && PROTECTED_ROUTES.some((r) => pathname.startsWith(r))) {
