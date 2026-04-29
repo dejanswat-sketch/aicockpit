@@ -1,126 +1,63 @@
 import { createBrowserClient } from '@supabase/ssr';
 
-const PFX = 'sb_';
-
-const canUseCookies = (() => {
-  let cache: boolean | null = null;
-  return () => {
-    if (typeof document === 'undefined') return false;
-    if (cache !== null) return cache;
-    const k = '__sb_test__';
-    document.cookie = `${k}=1; Path=/; SameSite=None; Secure; Partitioned`;
-    cache = document.cookie.includes(k);
-    document.cookie = `${k}=; Path=/; Max-Age=0; SameSite=None; Secure`;
-    return cache;
-  };
-})();
-
-const fromCookies = () =>
-  typeof document === 'undefined'
-    ? []
-    : document.cookie
-        .split(';')
-        .filter(Boolean)
-        .map((c) => {
-          const [name, ...rest] = c.trim().split('=');
-          return { name: name.trim(), value: decodeURIComponent(rest.join('=')) };
-        })
-        .filter((c) => c.name);
-
-const fromStorage = () => {
-  try {
-    return Object.keys(localStorage)
-      .filter((k) => k.startsWith(PFX))
-      .map((k) => ({ name: k.slice(PFX.length), value: localStorage.getItem(k) || '' }));
-  } catch {
-    return [];
-  }
-};
-
-const setCookie = (name: string, value: string, options?: any) => {
-  let s = `${name}=${encodeURIComponent(value)}; Path=${options?.path || '/'}; SameSite=None; Secure; Partitioned`;
-  if (options?.maxAge) s += `; Max-Age=${options.maxAge}`;
-  if (options?.domain) s += `; Domain=${options.domain}`;
-  if (options?.expires) s += `; Expires=${new Date(options.expires).toUTCString()}`;
-  document.cookie = s;
-};
-
-const getToken = () =>
-  (canUseCookies() ? fromCookies() : fromStorage()).find((c) =>
-    c.name.includes('auth-token')
-  )?.value ?? null;
-
-// Clear all stale Supabase auth tokens from storage
+/**
+ * Clears all Supabase auth tokens and orphaned lock entries from localStorage and cookies.
+ * Safe to call at any time — removes only sb-* and lock:* keys.
+ */
 export const clearStaleAuthTokens = () => {
-  if (typeof document === 'undefined') return;
+  if (typeof window === 'undefined') return;
+
   // Clear cookies
   document.cookie.split(';').forEach((c) => {
     const name = c.trim().split('=')[0];
-    if (name.includes('auth-token') || name.startsWith('sb-')) {
-      document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=None; Secure`;
+    if (name.startsWith('sb-') || name.includes('auth-token')) {
+      document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
     }
   });
-  // Clear localStorage
+
+  // Clear localStorage: all sb-* keys and all lock:* keys
   try {
-    Object.keys(localStorage)
-      .filter((k) => k.startsWith(PFX) || k.startsWith('sb-'))
-      .forEach((k) => localStorage.removeItem(k));
-  } catch {}
+    const keysToRemove = Object.keys(localStorage).filter(
+      (k) => k.startsWith('sb-') || k.startsWith('lock:')
+    );
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // localStorage may be unavailable in some environments
+  }
 };
 
-if (typeof window !== 'undefined' && !(window as any).__sb_patched__) {
-  (window as any).__sb_patched__ = true;
-  const orig = window.fetch.bind(window);
-  window.fetch = (input, init) => {
-    const token = getToken();
-    const url =
-      typeof input === 'string'
-        ? input
-        : input instanceof URL
-          ? input.href
-          : (input as Request).url;
-    if (token && (url.startsWith('/') || url.startsWith(window.location.origin))) {
-      init = {
-        ...(init || {}),
-        headers: { ...(init?.headers || {}), 'x-sb-token': token },
-      };
-    }
-    return orig(input, init);
-  };
-}
+// Singleton client — one instance per browser session
+let clientInstance: ReturnType<typeof createBrowserClient> | null = null;
 
 export function createClient() {
-  return createBrowserClient(
+  if (clientInstance) return clientInstance;
+
+  clientInstance = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       auth: {
+        // Automatically refresh tokens — Supabase will fire TOKEN_REFRESH_FAILED
+        // when the refresh token is invalid, at which point AuthContext handles cleanup.
         autoRefreshToken: true,
+        // Persist session in localStorage so the singleton survives page reloads.
         persistSession: true,
-        detectSessionInUrl: true,
-      },
-      cookies: {
-        getAll: () => (canUseCookies() ? fromCookies() : fromStorage()),
-        setAll(cookiesToSet) {
-          if (typeof document === 'undefined') return;
-          if (canUseCookies()) {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              value
-                ? setCookie(name, value, options)
-                : (document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=None; Secure`)
-            );
-          } else {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              try {
-                value
-                  ? localStorage.setItem(`${PFX}${name}`, value)
-                  : localStorage.removeItem(`${PFX}${name}`);
-              } catch {}
-              if (value) setCookie(name, value, options);
-            });
-          }
-        },
+        // Suppress the default console.error output for auth errors so that
+        // refresh_token_not_found errors don't flood the console while
+        // TOKEN_REFRESH_FAILED is being handled.
+        debug: false,
       },
     }
   );
+
+  return clientInstance;
+}
+
+/**
+ * Destroys the singleton and wipes all auth storage.
+ * Use this for a full hard reset when lock errors occur.
+ */
+export function resetClient() {
+  clientInstance = null;
+  clearStaleAuthTokens();
 }

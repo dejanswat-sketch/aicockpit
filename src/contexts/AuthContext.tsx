@@ -1,12 +1,72 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
-import { clearStaleAuthTokens } from '@/lib/supabase/client';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import type { Session, User } from '@supabase/supabase-js';
+import { createClient, clearStaleAuthTokens } from '@/lib/supabase/client';
 
-const AuthContext = createContext<any>({});
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-export const useAuth = () => {
+interface AuthContextValue {
+  user: User | null;
+  session: Session | null;
+  loading: boolean;
+  signUp: (email: string, password: string, metadata?: Record<string, unknown>) => Promise<unknown>;
+  signIn: (email: string, password: string) => Promise<unknown>;
+  signOut: () => Promise<void>;
+  getCurrentUser: () => Promise<User | null>;
+  isEmailVerified: () => boolean;
+  getUserProfile: () => Promise<unknown>;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Force-logout: wipe all storage and redirect to /login.
+ * Called when a refresh_token_not_found error is detected to break
+ * the rate-limit loop caused by repeated failed token refresh attempts.
+ */
+const forceLogout = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+    // Wipe sb-* and auth-token cookies
+    document.cookie.split(';').forEach((c) => {
+      const name = c.trim().split('=')[0];
+      if (name.startsWith('sb-') || name.includes('auth-token')) {
+        document.cookie = `${name}=; Path=/; Max-Age=0; SameSite=Lax`;
+      }
+    });
+  } catch {
+    // storage may be unavailable
+  }
+  window.location.href = '/login';
+};
+
+/** Returns true if the error message indicates a stale/invalid refresh token. */
+const isRefreshTokenError = (message?: string): boolean => {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('refresh_token_not_found') ||
+    lower.includes('invalid refresh token') ||
+    lower.includes('token has expired') ||
+    lower.includes('refresh token not found')
+  );
+};
+
+// ─── Context ──────────────────────────────────────────────────────────────────
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+export const useAuth = (): AuthContextValue => {
   const context = useContext(AuthContext);
   if (!context) {
     throw new Error('useAuth must be used within AuthProvider');
@@ -14,96 +74,148 @@ export const useAuth = () => {
   return context;
 };
 
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<any>(null);
-  const [session, setSession] = useState<any>(null);
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+
+  // Stable client reference — never recreated during component lifetime
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   useEffect(() => {
-    // Use getUser() instead of getSession() to avoid stale refresh token errors
-    supabase.auth.getUser().then(({ data: { user }, error }) => {
-      if (error) {
-        // Clear any stale session data on auth errors
-        clearStaleAuthTokens();
-        supabase.auth.signOut().catch(() => {});
-        setUser(null);
-        setSession(null);
-      } else {
-        setUser(user ?? null);
-      }
-      setLoading(false);
-    });
+    let mounted = true;
 
-    // Listen for auth changes
-    const {
-      data: { subscription }
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
-        setSession(session);
-        setUser(session?.user ?? null);
-      } else if (event === 'SIGNED_OUT') {
-        setSession(null);
-        setUser(null);
-      } else if (event === 'USER_UPDATED') {
-        setSession(session);
-        setUser(session?.user ?? null);
-      } else {
-        setSession(session);
-        setUser(session?.user ?? null);
-      }
-      setLoading(false);
-    });
+    // Small debounce: give the browser a tick before Supabase attempts
+    // automatic session refresh on load, reducing race conditions with
+    // Web Locks and preventing immediate rate-limit hits.
+    const initTimer = setTimeout(() => {
+      if (!mounted) return;
 
-    return () => subscription.unsubscribe();
+      // onAuthStateChange fires INITIAL_SESSION synchronously on mount,
+      // so no separate getSession() call is needed (avoids dual Web Lock acquisition).
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((event, currentSession) => {
+        if (!mounted) return;
+
+        switch (event) {
+          case 'INITIAL_SESSION': case'SIGNED_IN': case'TOKEN_REFRESHED': case'USER_UPDATED':
+            setSession(currentSession);
+            setUser(currentSession?.user ?? null);
+            setLoading(false);
+            break;
+
+          case 'TOKEN_REFRESH_FAILED':
+            // Supabase fires this when the refresh token is invalid/not found.
+            // Sign out locally first to stop the internal retry loop, then wipe
+            // storage and redirect to /login.
+            supabase.auth.signOut({ scope: 'local' }).finally(() => {
+              forceLogout();
+            });
+            break;
+
+          case 'SIGNED_OUT':
+            setSession(null);
+            setUser(null);
+            setLoading(false);
+            // Wipe any leftover sb-* / lock:* entries after sign-out
+            clearStaleAuthTokens();
+            // Redirect to login if not already there
+            if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+              window.location.href = '/login';
+            }
+            break;
+
+          default:
+            setSession(currentSession);
+            setUser(currentSession?.user ?? null);
+            setLoading(false);
+        }
+      });
+
+      // Cleanup
+      const cleanup = () => {
+        mounted = false;
+        subscription.unsubscribe();
+      };
+
+      // Store cleanup on the timer ref so the outer cleanup can call it
+      (initTimer as any)._cleanup = cleanup;
+    }, 100); // 100 ms debounce before first session refresh attempt
+
+    return () => {
+      mounted = false;
+      clearTimeout(initTimer);
+      // Call inner cleanup if it was registered
+      if ((initTimer as any)._cleanup) {
+        (initTimer as any)._cleanup();
+      }
+    };
+    // supabase is a stable ref — intentionally omitted from deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Email/Password Sign Up
-  const signUp = async (email: string, password: string, metadata = {}) => {
+  // ── Auth methods ────────────────────────────────────────────────────────────
+
+  const signUp = async (
+    email: string,
+    password: string,
+    metadata: Record<string, unknown> = {}
+  ) => {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: {
-          full_name: metadata?.fullName || '',
-          avatar_url: metadata?.avatarUrl || ''
+          full_name: (metadata.fullName as string) ?? '',
+          avatar_url: (metadata.avatarUrl as string) ?? '',
         },
-        emailRedirectTo: `${window.location.origin}/auth/callback`
-      }
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
     });
-    if (error) throw error;
+    if (error) {
+      if (isRefreshTokenError(error.message)) forceLogout();
+      throw error;
+    }
     return data;
   };
 
-  // Email/Password Sign In
   const signIn = async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
-      password
+      password,
     });
-    if (error) throw error;
+    if (error) {
+      if (isRefreshTokenError(error.message)) forceLogout();
+      throw error;
+    }
     return data;
   };
 
-  // Sign Out
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   };
 
-  // Get Current User
-  const getCurrentUser = async () => {
-    const { data: { user }, error } = await supabase.auth.getUser();
-    if (error) throw error;
-    return user;
+  const getCurrentUser = async (): Promise<User | null> => {
+    const {
+      data: { user: currentUser },
+      error,
+    } = await supabase.auth.getUser();
+    if (error) {
+      if (isRefreshTokenError(error.message)) forceLogout();
+      throw error;
+    }
+    return currentUser;
   };
 
-  // Check if Email is Verified
-  const isEmailVerified = () => {
-    return user?.email_confirmed_at !== null;
+  const isEmailVerified = (): boolean => {
+    return user?.email_confirmed_at != null;
   };
 
-  // Get User Profile from Database
   const getUserProfile = async () => {
     if (!user) return null;
     const { data, error } = await supabase
@@ -115,7 +227,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return data;
   };
 
-  const value = {
+  // ── Context value ───────────────────────────────────────────────────────────
+
+  const value: AuthContextValue = {
     user,
     session,
     loading,
@@ -124,7 +238,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     signOut,
     getCurrentUser,
     isEmailVerified,
-    getUserProfile
+    getUserProfile,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

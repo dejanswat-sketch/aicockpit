@@ -2,9 +2,11 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Search, Upload, FileText, Trash2, Brain, Eye, Download, MoreHorizontal, FolderOpen, Clock, HardDrive, Tag, Plus, Loader2, AlertCircle } from 'lucide-react';
+import { Search, Upload, FileText, Trash2, Brain, Eye, Download, MoreHorizontal, FolderOpen, Clock, HardDrive, Tag, Plus, Loader2, AlertCircle, Briefcase, FileDown, Key, CheckCircle, EyeOff } from 'lucide-react';
 
 import { vaultDocumentsService, type VaultDocument } from '@/lib/services/cockpitService';
+import PortfolioSection, { PORTFOLIO_PROJECTS, type Project } from './PortfolioSection';
+import CVGeneratorModal from './CVGeneratorModal';
 
 const TYPE_CONFIG: Record<VaultDocument['type'], { color: string; bg: string }> = {
   CV: { color: 'text-teal-400', bg: 'bg-teal-400/10 border-teal-400/20' },
@@ -16,7 +18,10 @@ const TYPE_CONFIG: Record<VaultDocument['type'], { color: string; bg: string }> 
   Skills: { color: 'text-emerald-400', bg: 'bg-emerald-400/10 border-emerald-400/20' },
 };
 
+type VaultTab = 'documents' | 'portfolio';
+
 export default function VaultContent() {
+  const [activeTab, setActiveTab] = useState<VaultTab>('documents');
   const [documents, setDocuments] = useState<VaultDocument[]>([]);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -26,6 +31,12 @@ export default function VaultContent() {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [cvModalOpen, setCvModalOpen] = useState(false);
+  const [cvSelectedProjects, setCvSelectedProjects] = useState<Project[]>([]);
+  const [cvJobText, setCvJobText] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
+  const [geminiKeyVisible, setGeminiKeyVisible] = useState(false);
+  const [savingKey, setSavingKey] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadDocuments = useCallback(async () => {
@@ -61,21 +72,24 @@ export default function VaultContent() {
     return `${(bytes / 1000000).toFixed(1)} MB`;
   }
 
-  const handleUpload = useCallback(async (fileName: string, fileSize: number) => {
+  const handleUpload = useCallback(async (file: File) => {
     setUploading(true);
     setUploadProgress(0);
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise((r) => setTimeout(r, 80));
-      setUploadProgress(i);
-    }
+    // Simulate progress while uploading
+    const progressInterval = setInterval(() => {
+      setUploadProgress((prev) => (prev < 85 ? prev + 5 : prev));
+    }, 200);
     try {
-      const newDoc = await vaultDocumentsService.create({ name: fileName, sizeBytes: fileSize });
+      const newDoc = await vaultDocumentsService.upload(file);
+      clearInterval(progressInterval);
+      setUploadProgress(100);
       if (newDoc) {
         setDocuments((prev) => [newDoc, ...prev]);
-        toast.success(`"${fileName}" uploaded to Vault`);
+        toast.success(`"${file.name}" uploaded to Vault`);
       }
-    } catch {
-      toast.error('Failed to upload document');
+    } catch (err: any) {
+      clearInterval(progressInterval);
+      toast.error(err.message || 'Failed to upload document');
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -86,19 +100,19 @@ export default function VaultContent() {
     e.preventDefault();
     setDragOver(false);
     const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) handleUpload(files[0].name, files[0].size);
+    if (files.length > 0) handleUpload(files[0]);
   }, [handleUpload]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
-    if (files.length > 0) handleUpload(files[0].name, files[0].size);
+    if (files.length > 0) handleUpload(files[0]);
   };
 
-  const deleteDocument = async (id: string, name: string) => {
+  const deleteDocument = async (id: string, name: string, storagePath: string | null) => {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
     setOpenMenuId(null);
     try {
-      await vaultDocumentsService.delete(id);
+      await vaultDocumentsService.delete(id, storagePath);
       toast.success(`"${name}" deleted from Vault`);
     } catch {
       toast.error('Failed to delete document');
@@ -111,6 +125,57 @@ export default function VaultContent() {
     toast.success(`"${name}" added to AI BRAIN context`, {
       action: { label: 'Open', onClick: () => window.location.href = '/ai-brain' },
     });
+  };
+
+  const downloadDocument = async (doc: VaultDocument) => {
+    setOpenMenuId(null);
+    if (!doc.storagePath) {
+      toast.error('No file stored — this document was added without a file upload');
+      return;
+    }
+    try {
+      const url = await vaultDocumentsService.getSignedUrl(doc.storagePath);
+      if (!url) { toast.error('Could not generate download link'); return; }
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = doc.name;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloading "${doc.name}"`);
+    } catch {
+      toast.error('Failed to download document');
+    }
+  };
+
+  const handleGenerateCV = (projects: Project[], jobText: string) => {
+    setCvSelectedProjects(projects);
+    setCvJobText(jobText);
+    setCvModalOpen(true);
+  };
+
+  const handleSaveGeminiKey = async () => {
+    if (!geminiKey.trim()) {
+      toast.error('Please enter a valid API key');
+      return;
+    }
+    setSavingKey(true);
+    try {
+      const res = await fetch('/api/settings/gemini-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: geminiKey.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save key');
+      toast.success('Gemini API key updated successfully');
+      setGeminiKey('');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to save Gemini API key');
+    } finally {
+      setSavingKey(false);
+    }
   };
 
   const types = Array.from(new Set(documents.map((d) => d.type)));
@@ -164,216 +229,312 @@ export default function VaultContent() {
         })}
       </div>
 
-      {/* Upload zone */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
-        onClick={() => !uploading && fileInputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all duration-200 ${
-          dragOver
-            ? 'border-teal-400/60 bg-teal-400/5' : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50'
-        }`}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf,.doc,.docx,.txt"
-          onChange={handleFileInput}
-          className="hidden"
-        />
-        {uploading ? (
-          <div className="flex flex-col items-center gap-2 w-full max-w-xs">
-            <Loader2 size={20} className="text-teal-400 animate-spin" />
-            <p className="text-sm text-zinc-400">Uploading to Vault...</p>
-            <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-              <div
-                className="h-full bg-teal-400 rounded-full transition-all duration-200"
-                style={{ width: `${uploadProgress}%` }}
-              />
-            </div>
-            <p className="text-xs font-mono text-zinc-600">{uploadProgress}%</p>
+      {/* Gemini API Key Settings */}
+      <div className="cockpit-card p-4 flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-blue-400/10 flex items-center justify-center flex-shrink-0">
+            <Key size={14} className="text-blue-400" />
           </div>
-        ) : (
-          <>
-            <div className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center">
-              <Upload size={18} className={dragOver ? 'text-teal-400' : 'text-zinc-500'} />
-            </div>
-            <p className="text-sm font-medium text-zinc-400">
-              {dragOver ? 'Drop to upload' : 'Drop files here or click to upload'}
-            </p>
-            <p className="text-xs text-zinc-600">PDF, DOC, DOCX, TXT · Max 20 MB per file</p>
-          </>
-        )}
-      </div>
-
-      {/* Search + filters */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-          <input
-            type="text"
-            placeholder="Search documents and tags..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-4 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 transition-all"
-          />
+          <div>
+            <p className="text-xs font-semibold text-zinc-200">Gemini API Key</p>
+            <p className="text-[10px] text-zinc-600">Update your Google Gemini API key</p>
+          </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {(['all', ...types] as string[]).map((t) => (
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              type={geminiKeyVisible ? 'text' : 'password'}
+              placeholder="Paste new Gemini API key..."
+              value={geminiKey}
+              onChange={(e) => setGeminiKey(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveGeminiKey()}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-3 pr-10 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-blue-400/50 font-mono transition-all"
+            />
             <button
-              key={`vf-${t}`}
-              onClick={() => setTypeFilter(t)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150 ${
-                typeFilter === t
-                  ? 'bg-teal-400/15 border-teal-400/30 text-teal-400' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'
-              }`}
+              type="button"
+              onClick={() => setGeminiKeyVisible((v) => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors"
             >
-              {t === 'all' ? 'All' : t}
+              {geminiKeyVisible ? <EyeOff size={13} /> : <Eye size={13} />}
             </button>
-          ))}
-        </div>
-        <span className="text-xs font-mono text-zinc-600 ml-auto">
-          {filtered.length} documents
-        </span>
-      </div>
-
-      {/* Document grid */}
-      {filtered.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center py-16">
-          <FolderOpen size={40} className="text-zinc-700 mb-4" />
-          <p className="text-zinc-400 font-medium">No documents found</p>
-          <p className="text-zinc-600 text-sm mt-1">Upload your CV, portfolio, or case studies to get started</p>
+          </div>
           <button
-            onClick={() => fileInputRef.current?.click()}
-            className="mt-4 flex items-center gap-2 px-4 py-2 bg-teal-400/10 border border-teal-400/20 text-teal-400 rounded-lg text-sm font-medium hover:bg-teal-400/20 transition-all"
+            onClick={handleSaveGeminiKey}
+            disabled={savingKey || !geminiKey.trim()}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-400/10 border border-blue-400/20 text-blue-400 rounded-lg text-xs font-medium hover:bg-blue-400/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
           >
-            <Plus size={14} />
-            Upload Document
+            {savingKey ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <CheckCircle size={12} />
+            )}
+            {savingKey ? 'Saving...' : 'Save Key'}
           </button>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3 pb-6">
-          {filtered.map((doc) => {
-            const typeConf = TYPE_CONFIG[doc.type];
-            const isMenuOpen = openMenuId === doc.id;
-            return (
-              <div
-                key={doc.id}
-                className="cockpit-card cockpit-card-hover p-4 flex flex-col gap-3 relative group"
-              >
-                {/* Header */}
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center flex-shrink-0">
-                    <FileText size={18} className={typeConf.color} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-600 text-zinc-200 truncate leading-snug" title={doc.name}>
-                      {doc.name}
-                    </p>
-                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border mt-1 ${typeConf.bg} ${typeConf.color}`}>
-                      {doc.type}
-                    </span>
-                  </div>
-                  {/* Menu */}
-                  <div className="relative">
-                    <button
-                      onClick={() => setOpenMenuId(isMenuOpen ? null : doc.id)}
-                      className="p-1.5 rounded-md text-zinc-600 hover:text-zinc-300 hover:bg-zinc-700 transition-all opacity-0 group-hover:opacity-100"
-                    >
-                      <MoreHorizontal size={14} />
-                    </button>
-                    {isMenuOpen && (
-                      <div className="absolute right-0 top-8 z-20 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl py-1 w-44 animate-fade-in">
-                        <button
-                          onClick={() => { toast.success('Preview opened'); setOpenMenuId(null); }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
-                        >
-                          <Eye size={12} />
-                          Preview
-                        </button>
-                        <button
-                          onClick={() => sendToAIBrain(doc.name)}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-teal-400 hover:bg-zinc-700 transition-colors"
-                        >
-                          <Brain size={12} />
-                          Send to AI BRAIN
-                        </button>
-                        <button
-                          onClick={() => { toast.success('Download started'); setOpenMenuId(null); }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
-                        >
-                          <Download size={12} />
-                          Download
-                        </button>
-                        <hr className="border-zinc-700 my-1" />
-                        <button
-                          onClick={() => deleteDocument(doc.id, doc.name)}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-zinc-700 transition-colors"
-                        >
-                          <Trash2 size={12} />
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
+      </div>
 
-                {/* Tags */}
-                <div className="flex flex-wrap gap-1">
-                  {doc.tags.map((tag) => (
-                    <span key={`${doc.id}-tag-${tag}`} className="flex items-center gap-0.5 px-1.5 py-0.5 bg-zinc-800 text-zinc-500 text-[9px] rounded">
-                      <Tag size={8} />
-                      {tag}
-                    </span>
-                  ))}
-                </div>
+      {/* Tab switcher */}
+      <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 w-fit">
+        <button
+          onClick={() => setActiveTab('documents')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-all duration-150 ${
+            activeTab === 'documents'
+              ? 'bg-zinc-800 text-zinc-200 shadow-sm' :'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          <FileText size={13} />
+          Documents
+        </button>
+        <button
+          onClick={() => setActiveTab('portfolio')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-all duration-150 ${
+            activeTab === 'portfolio' ?'bg-zinc-800 text-zinc-200 shadow-sm' :'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          <Briefcase size={13} />
+          Portfolio
+          <span className="px-1.5 py-0.5 bg-teal-400/15 text-teal-400 text-[9px] rounded font-mono">
+            {PORTFOLIO_PROJECTS.length}
+          </span>
+        </button>
+        <button
+          onClick={() => { setCvSelectedProjects([]); setCvJobText(''); setCvModalOpen(true); }}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-300 transition-all duration-150"
+        >
+          <FileDown size={13} />
+          CV Generator
+        </button>
+      </div>
 
-                {/* Metadata */}
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-zinc-800">
-                  <div>
-                    <p className="text-[9px] text-zinc-600 uppercase tracking-wide">Size</p>
-                    <p className="text-xs font-mono-data text-zinc-400">{doc.size}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] text-zinc-600 uppercase tracking-wide">AI Uses</p>
-                    <p className="text-xs font-mono-data text-zinc-400">{doc.usageCount}×</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] text-zinc-600 uppercase tracking-wide">Uploaded</p>
-                    <p className="text-xs text-zinc-500">{doc.uploadedAt}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] text-zinc-600 uppercase tracking-wide">Last Used</p>
-                    <p className="text-xs text-zinc-500 flex items-center gap-1">
-                      <Clock size={9} />
-                      {doc.lastUsed}
-                    </p>
-                  </div>
+      {/* Documents tab */}
+      {activeTab === 'documents' && (
+        <>
+          {/* Upload zone */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            onClick={() => !uploading && fileInputRef.current?.click()}
+            className={`relative border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all duration-200 ${
+              dragOver
+                ? 'border-teal-400/60 bg-teal-400/5' : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/50'
+            }`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.txt"
+              onChange={handleFileInput}
+              className="hidden"
+            />
+            {uploading ? (
+              <div className="flex flex-col items-center gap-2 w-full max-w-xs">
+                <Loader2 size={20} className="text-teal-400 animate-spin" />
+                <p className="text-sm text-zinc-400">Uploading to Vault...</p>
+                <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="h-full bg-teal-400 rounded-full transition-all duration-200"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
                 </div>
-
-                {/* Quick actions */}
-                <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                  <button
-                    onClick={() => sendToAIBrain(doc.name)}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-teal-400/10 border border-teal-400/20 text-teal-400 rounded-lg text-[10px] font-medium hover:bg-teal-400/20 transition-all"
-                  >
-                    <Brain size={11} />
-                    AI BRAIN
-                  </button>
-                  <button
-                    onClick={() => toast.success('Preview opened')}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-lg text-[10px] font-medium hover:border-zinc-600 hover:text-zinc-300 transition-all"
-                  >
-                    <Eye size={11} />
-                    Preview
-                  </button>
-                </div>
+                <p className="text-xs font-mono text-zinc-600">{uploadProgress}%</p>
               </div>
-            );
-          })}
-        </div>
+            ) : (
+              <>
+                <div className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center">
+                  <Upload size={18} className={dragOver ? 'text-teal-400' : 'text-zinc-500'} />
+                </div>
+                <p className="text-sm font-medium text-zinc-400">
+                  {dragOver ? 'Drop to upload' : 'Drop files here or click to upload'}
+                </p>
+                <p className="text-xs text-zinc-600">PDF, DOC, DOCX, TXT · Max 20 MB per file</p>
+              </>
+            )}
+          </div>
+
+          {/* Search + filters */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[200px] max-w-md">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="text"
+                placeholder="Search documents and tags..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-9 pr-4 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-teal-400/50 transition-all"
+              />
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {(['all', ...types] as string[]).map((t) => (
+                <button
+                  key={`vf-${t}`}
+                  onClick={() => setTypeFilter(t)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150 ${
+                    typeFilter === t
+                      ? 'bg-teal-400/15 border-teal-400/30 text-teal-400' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'
+                  }`}
+                >
+                  {t === 'all' ? 'All' : t}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs font-mono text-zinc-600 ml-auto">
+              {filtered.length} documents
+            </span>
+          </div>
+
+          {/* Document grid */}
+          {filtered.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center py-16">
+              <FolderOpen size={40} className="text-zinc-700 mb-4" />
+              <p className="text-zinc-400 font-medium">No documents found</p>
+              <p className="text-zinc-600 text-sm mt-1">Upload your CV, portfolio, or case studies to get started</p>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="mt-4 flex items-center gap-2 px-4 py-2 bg-teal-400/10 border border-teal-400/20 text-teal-400 rounded-lg text-sm font-medium hover:bg-teal-400/20 transition-all"
+              >
+                <Plus size={14} />
+                Upload Document
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3 pb-6">
+              {filtered.map((doc) => {
+                const TYPE_CONFIG: Record<VaultDocument['type'], { color: string; bg: string }> = {
+                  CV: { color: 'text-teal-400', bg: 'bg-teal-400/10 border-teal-400/20' },
+                  Portfolio: { color: 'text-cyan-400', bg: 'bg-cyan-400/10 border-cyan-400/20' },
+                  'Case Study': { color: 'text-violet-400', bg: 'bg-violet-400/10 border-violet-400/20' },
+                  'Cover Letter': { color: 'text-amber-400', bg: 'bg-amber-400/10 border-amber-400/20' },
+                  Template: { color: 'text-blue-400', bg: 'bg-blue-400/10 border-blue-400/20' },
+                  Contract: { color: 'text-red-400', bg: 'bg-red-400/10 border-red-400/20' },
+                  Skills: { color: 'text-emerald-400', bg: 'bg-emerald-400/10 border-emerald-400/20' },
+                };
+                const typeConf = TYPE_CONFIG[doc.type];
+                const isMenuOpen = openMenuId === doc.id;
+                return (
+                  <div
+                    key={doc.id}
+                    className="cockpit-card cockpit-card-hover p-4 flex flex-col gap-3 relative group"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center flex-shrink-0">
+                        <FileText size={18} className={typeConf.color} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-600 text-zinc-200 truncate leading-snug" title={doc.name}>
+                          {doc.name}
+                        </p>
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border mt-1 ${typeConf.bg} ${typeConf.color}`}>
+                          {doc.type}
+                        </span>
+                      </div>
+                      <div className="relative">
+                        <button
+                          onClick={() => setOpenMenuId(isMenuOpen ? null : doc.id)}
+                          className="p-1.5 rounded-md text-zinc-600 hover:text-zinc-300 hover:bg-zinc-700 transition-all opacity-0 group-hover:opacity-100"
+                        >
+                          <MoreHorizontal size={14} />
+                        </button>
+                        {isMenuOpen && (
+                          <div className="absolute right-0 top-8 z-20 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl py-1 w-44 animate-fade-in">
+                            <button
+                              onClick={() => { toast.success('Preview opened'); setOpenMenuId(null); }}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
+                            >
+                              <Eye size={12} />
+                              Preview
+                            </button>
+                            <button
+                              onClick={() => sendToAIBrain(doc.name)}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-xs text-teal-400 hover:bg-zinc-700 transition-colors"
+                            >
+                              <Brain size={12} />
+                              Send to AI BRAIN
+                            </button>
+                            <button
+                              onClick={() => downloadDocument(doc)}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
+                            >
+                              <Download size={12} />
+                              Download
+                            </button>
+                            <hr className="border-zinc-700 my-1" />
+                            <button
+                              onClick={() => deleteDocument(doc.id, doc.name, doc.storagePath)}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-zinc-700 transition-colors"
+                            >
+                              <Trash2 size={12} />
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {doc.tags.map((tag) => (
+                        <span key={`${doc.id}-tag-${tag}`} className="flex items-center gap-0.5 px-1.5 py-0.5 bg-zinc-800 text-zinc-500 text-[9px] rounded">
+                          <Tag size={8} />
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-zinc-800">
+                      <div>
+                        <p className="text-[9px] text-zinc-600 uppercase tracking-wide">Size</p>
+                        <p className="text-xs font-mono-data text-zinc-400">{doc.size}</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-zinc-600 uppercase tracking-wide">AI Uses</p>
+                        <p className="text-xs font-mono-data text-zinc-400">{doc.usageCount}×</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-zinc-600 uppercase tracking-wide">Uploaded</p>
+                        <p className="text-xs text-zinc-500">{doc.uploadedAt}</p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-zinc-600 uppercase tracking-wide">Last Used</p>
+                        <p className="text-xs text-zinc-500 flex items-center gap-1">
+                          <Clock size={9} />
+                          {doc.lastUsed}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                      <button
+                        onClick={() => sendToAIBrain(doc.name)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-teal-400/10 border border-teal-400/20 text-teal-400 rounded-lg text-[10px] font-medium hover:bg-teal-400/20 transition-all"
+                      >
+                        <Brain size={11} />
+                        AI BRAIN
+                      </button>
+                      <button
+                        onClick={() => toast.success('Preview opened')}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-zinc-800 border border-zinc-700 text-zinc-400 rounded-lg text-[10px] font-medium hover:border-zinc-600 hover:text-zinc-300 transition-all"
+                      >
+                        <Eye size={11} />
+                        Preview
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
+
+      {/* Portfolio tab */}
+      {activeTab === 'portfolio' && (
+        <PortfolioSection onGenerateCV={handleGenerateCV} />
+      )}
+
+      {/* CV Generator Modal */}
+      <CVGeneratorModal
+        isOpen={cvModalOpen}
+        onClose={() => setCvModalOpen(false)}
+        selectedProjects={cvSelectedProjects.length > 0 ? cvSelectedProjects : PORTFOLIO_PROJECTS.slice(0, 3)}
+        jobText={cvJobText}
+      />
     </div>
   );
 }

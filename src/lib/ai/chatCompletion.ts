@@ -24,13 +24,15 @@ export async function getStreamingChatCompletion(
   onChunk: (chunk: any) => void,
   onComplete: () => void,
   onError: (error: Error) => void,
-  parameters: object = {}
+  parameters: object = {},
+  signal?: AbortSignal
 ) {
   try {
     const response = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider, model, messages, stream: true, parameters }),
+      signal,
     });
 
     if (!response.ok) {
@@ -47,6 +49,9 @@ export async function getStreamingChatCompletion(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+
+      // Stop reading if aborted
+      if (signal?.aborted) break;
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -73,6 +78,11 @@ export async function getStreamingChatCompletion(
       }
     }
   } catch (error) {
+    // If the request was aborted, call onComplete instead of onError
+    if (error instanceof Error && error.name === 'AbortError') {
+      onComplete();
+      return;
+    }
     console.error('Streaming error:', error);
     onError(error instanceof Error ? error : new Error('Streaming error'));
   }
